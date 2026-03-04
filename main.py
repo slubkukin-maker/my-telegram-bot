@@ -8,22 +8,22 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import BotCommand
 
-# --- ЛОГИРОВАНИЕ (Чтобы видеть ошибки в Render) ---
+# --- ЛОГИ ---
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # --- SERVER ---
 app = Flask('')
 @app.route('/')
-def home(): return "Бот в сети!"
+def home(): return "OK"
 
 def run():
+    # ФИКС ПОРТА: Render требует 10000
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
 # --- CONFIG ---
 TOKEN = "8344752199:AAFwouRQZYV2ztyDwC44qCu8uTxq2lgWtoc"
-ADMIN_ID = 8294726083 # ПРОВЕРЬ ЭТОТ ID ЕЩЕ РАЗ!
+ADMIN_ID = 8294726083 
 CHAT_ID = -1003393441169 
 DB_PATH = "database.db"
 
@@ -38,13 +38,13 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- КОМАНДЫ (БЕЗ ПРОВЕРКИ ID ДЛЯ ТЕСТА) ---
+# --- КОМАНДЫ (БЕЗ ЖЕСТКИХ ФИЛЬТРОВ) ---
 
 @dp.message(Command("check"))
 async def cmd_check(m: types.Message):
-    logger.info(f"Команда /check от {m.from_user.id}")
+    # Если бот увидит команду, он ОБЯЗАТЕЛЬНО ответит хоть что-то
     if m.from_user.id != ADMIN_ID:
-        await m.answer(f"Твой ID ({m.from_user.id}) не совпадает с ADMIN_ID ({ADMIN_ID})")
+        await m.answer(f"❌ Доступ запрещен. Твой ID: {m.from_user.id}, а нужен: {ADMIN_ID}")
         return
     
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
@@ -52,14 +52,16 @@ async def cmd_check(m: types.Message):
     cursor.execute("SELECT user_id, name FROM all_users"); all_u = cursor.fetchall(); conn.close()
     
     bad = [f"<code>{u[0]}</code> | {u[1]}" for u in all_u if u[0] not in approved]
-    if not bad: await m.answer("Все подтверждены! ✅")
-    else: await m.answer("<b>Без роли:</b>\n\n" + "\n".join(bad), parse_mode="HTML")
+    if not bad: 
+        await m.answer("Все подтверждены! ✅")
+    else: 
+        await m.answer("<b>Без роли:</b>\n\n" + "\n".join(bad), parse_mode="HTML")
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
-    await m.answer(f"Привет! Твой ID: <code>{m.from_user.id}</code>\nADMIN_ID в коде: <code>{ADMIN_ID}</code>", parse_mode="HTML")
+    await m.answer(f"Бот работает! Твой ID: <code>{m.from_user.id}</code>", parse_mode="HTML")
 
-# --- СБОР (С ФИЛЬТРОМ, ЧТОБЫ НЕ ЖРАЛ КОМАНДЫ) ---
+# --- СБОР (ИГНОРИРУЕМ КОМАНДЫ) ---
 @dp.message(F.chat.id == CHAT_ID, ~F.text.startswith("/"))
 async def collect(m: types.Message):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
@@ -69,9 +71,10 @@ async def collect(m: types.Message):
 async def main():
     init_db()
     Thread(target=run, daemon=True).start()
+    # Принудительно ставим команды в меню
     await bot.set_my_commands([
         BotCommand(command="start", description="Старт"),
-        BotCommand(command="check", description="Проверка")
+        BotCommand(command="check", description="Проверка (только админ)")
     ])
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
