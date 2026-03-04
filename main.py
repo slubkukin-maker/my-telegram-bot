@@ -94,7 +94,7 @@ async def p_user(m: types.Message, state: FSMContext):
     await bot.send_message(ADMIN_ID, f"🆕 <b>АНКЕТА</b>\nНик: {m.text}\nID: {uid}\nРоль: {role}", reply_markup=kb, parse_mode="HTML")
     await m.answer("Анкета отправлена!"); await state.clear()
 
-# --- КНОПКИ АДМИНА (ИСПРАВЛЕНО) ---
+# --- КНОПКИ АДМИНА (С ТЕХНИЧЕСКИМ ИСПРАВЛЕНИЕМ SQL) ---
 @dp.callback_query(F.data.startswith("adm_"))
 async def admin_btns(call: CallbackQuery, state: FSMContext):
     data_parts = call.data.split("_")
@@ -103,7 +103,8 @@ async def admin_btns(call: CallbackQuery, state: FSMContext):
     
     if action == "ok":
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, 'Member')")
+        # ИСПРАВЛЕНО: target_uid теперь передается правильно
+        cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, 'Member')", (target_uid,))
         conn.commit(); conn.close()
         try:
             await bot.send_message(target_uid, f"Принято! ✨\n{CHAT_LINK}")
