@@ -12,18 +12,18 @@ from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
                             InlineKeyboardButton, InlineKeyboardMarkup, 
                             BotCommand, CallbackQuery, ChatJoinRequest)
 
-# --- SERVER ---
+# --- SERVER ДЛЯ RENDER ---
 app = Flask('')
 @app.route('/')
 def home(): return "Бот Harmony активен!"
 
 def run():
-    # Порт 10000 для Render
+    # Render обычно использует порт 10000
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- CONFIG ---
-TOKEN = "8344752199:AAHI7gZKcDAK2Dc7jzJMgjqO50iSy3LbYbY"
+# --- CONFIG (НОВЫЙ ТОКЕН ТУТ) ---
+TOKEN = "8344752199:AAFvfamddKvG6KYPJRC-aYa4uWRunQ7nH2s"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -32,7 +32,7 @@ DB_PATH = "database.db"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- STATES ---
+# --- СТРУКТУРА СОСТОЯНИЙ ---
 class RegForm(StatesGroup):
     role = State()
     username = State()
@@ -40,7 +40,6 @@ class RegForm(StatesGroup):
 class ComplaintForm(StatesGroup):
     my_role = State()
     text = State()
-    evidence = State()
     target_role = State()
 
 class FeedbackForm(StatesGroup):
@@ -62,15 +61,10 @@ def is_approved(uid):
     res = cursor.fetchone(); conn.close()
     return bool(res)
 
-def get_uid_by_role(role_name):
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM approved_users WHERE LOWER(role) = LOWER(?)", (role_name,))
-    res = cursor.fetchone(); conn.close()
-    return res[0] if res else None
-
 # --- МЕХАНИКА ТЕГОВ (MEMBER TAGS) ---
 async def set_member_tag(uid, tag_text):
     try:
+        # Установка плашки без прав админа у юзера
         await bot.make_request("setChatMemberTag", {
             "chat_id": CHAT_ID,
             "user_id": uid,
@@ -79,7 +73,7 @@ async def set_member_tag(uid, tag_text):
     except Exception as e:
         logging.error(f"Ошибка Member Tag: {e}")
 
-# --- ЛОГИКА СОЗЫВА ---
+# --- ЛОГИКА СОЗЫВА (n/n) ---
 async def global_call(new_role):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM all_users"); rows = cursor.fetchall(); conn.close()
@@ -90,6 +84,7 @@ async def global_call(new_role):
     except:
         total_humans = len(rows)
 
+    # Тегаем скрыто через точки для уведомления
     mentions = [f"<a href='tg://user?id={r[0]}'>.</a>" for r in rows]
     text = (f"📣 <b>СОЗЫВ: новый участник</b>\n"
             f"Роль: <b>{new_role}</b>\n\n"
@@ -99,7 +94,7 @@ async def global_call(new_role):
         chunk = "".join(mentions[i:i+10])
         await bot.send_message(CHAT_ID, text + chunk, parse_mode="HTML")
 
-# --- СБОР ЮЗЕРОВ ---
+# --- СБОР ЮЗЕРОВ ДЛЯ СОЗЫВА ---
 @dp.message(F.chat.id == CHAT_ID)
 async def collector(m: types.Message):
     if m.from_user.is_bot: return
@@ -108,7 +103,7 @@ async def collector(m: types.Message):
                    (m.from_user.id, m.from_user.first_name))
     conn.commit(); conn.close()
 
-# --- МЕНЮ ---
+# --- МЕНЮ (КЛАВИАТУРА) ---
 def get_main_kb(uid):
     btns = []
     if not is_approved(uid): btns.append([KeyboardButton(text="📝 Вступить")])
@@ -118,9 +113,10 @@ def get_main_kb(uid):
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
-    await m.answer("Панель управления активирована.", reply_markup=get_main_kb(m.from_user.id))
+    await m.answer("Панель управления Harmony активирована.", reply_markup=get_main_kb(m.from_user.id))
 
-# --- АДМИН КОМАНДЫ ---
+# --- АДМИН КОМАНДЫ (ADD / DEL / LIST) ---
+
 @dp.message(Command("add"))
 async def cmd_add(m: types.Message):
     if m.from_user.id != ADMIN_ID: return
@@ -143,7 +139,7 @@ async def cmd_del(m: types.Message):
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
         conn.commit(); conn.close()
         await set_member_tag(uid, "")
-        await m.answer(f"✅ Участник {uid} удален.")
+        await m.answer(f"✅ Участник {uid} удален из базы и лишен тега.")
     except: await m.answer("Формат: `/del ID`")
 
 @dp.message(Command("list"))
@@ -151,7 +147,7 @@ async def cmd_list(m: types.Message):
     if m.from_user.id != ADMIN_ID: return
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("SELECT user_id, role FROM approved_users"); rows = cursor.fetchall(); conn.close()
-    res = "📂 <b>БАЗА:</b>\n" + "\n".join([f"<code>{r[0]}</code> | {r[1]}" for r in rows])
+    res = "📂 <b>БАЗА УЧАСТНИКОВ:</b>\n" + "\n".join([f"<code>{r[0]}</code> | {r[1]}" for r in rows])
     await m.answer(res if rows else "База пуста", parse_mode="HTML")
 
 # --- ВСТУПЛЕНИЕ ---
@@ -183,10 +179,10 @@ async def approve_user(call: CallbackQuery):
     await set_member_tag(uid, role)
     await global_call(role)
 
-# --- ЖАЛОБЫ И ОТЗЫВЫ ---
+# --- ЖАЛОБЫ, ОТЗЫВЫ, АПЕЛЛЯЦИИ ---
 @dp.message(F.text == "📩 Оставить отзыв")
 async def btn_feedback(m: types.Message, state: FSMContext):
-    await m.answer("Напишите ваш отзыв:"); await state.set_state(FeedbackForm.text)
+    await m.answer("Напишите ваш анонимный отзыв:"); await state.set_state(FeedbackForm.text)
 
 @dp.message(FeedbackForm.text)
 async def process_fb(m: types.Message, state: FSMContext):
@@ -211,11 +207,21 @@ async def comp_final(m: types.Message, state: FSMContext):
     await bot.send_message(ADMIN_ID, f"🚨 <b>ЖАЛОБА</b>\nОт: {data['my_role']}\nНа: {m.text}\nСуть: {data['text']}", parse_mode="HTML")
     await m.answer("Жалоба отправлена."); await state.clear()
 
+@dp.message(F.text == "🛡 Апелляция")
+async def btn_appeal(m: types.Message, state: FSMContext):
+    if not is_approved(m.from_user.id): return
+    await m.answer("Опишите причину апелляции:"); await state.set_state(AppealForm.text)
+
+@dp.message(AppealForm.text)
+async def process_appeal(m: types.Message, state: FSMContext):
+    await bot.send_message(ADMIN_ID, f"🛡 <b>АПЕЛЛЯЦИЯ</b>\nID: {m.from_user.id}\nТекст: {m.text}", parse_mode="HTML")
+    await m.answer("Апелляция отправлена."); await state.clear()
+
 # --- ЗАПУСК ---
 async def main():
     init_db()
     Thread(target=run, daemon=True).start()
-    await asyncio.sleep(2)
+    await asyncio.sleep(2) # Задержка для Render
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_my_commands([
         BotCommand(command="start", description="Меню"),
