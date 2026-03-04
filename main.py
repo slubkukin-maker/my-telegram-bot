@@ -10,21 +10,17 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery
 
-# --- SERVER ---
+# --- SERVER FOR RENDER ---
 app = Flask('')
 @app.route('/')
-def home(): return "OK"
+def home(): return "Бот работает 24/7"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-def keep_alive():
-    t = Thread(target=run, daemon=True)
-    t.start()
-
 # --- CONFIG ---
-TOKEN = "8344752199:AAEM_QXGdVx5t8XkQCMWQlCKubhwBaeMvTo"
+TOKEN = "8344752199:AAEU6zgkYOPGyIFHmIxoTPCIuvRclEIczdc"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -47,24 +43,20 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- КНОПКИ ГЛАВНОГО МЕНЮ ---
+# --- КНОПКИ (ВСТУПИТЬ, ЖАЛОБА, АПЕЛЛЯЦИЯ, ОТЗЫВ) ---
 def main_kb():
-    kb = [
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Вступить", callback_data="start_reg")],
         [InlineKeyboardButton(text="⚖️ Апелляция", callback_data="type_апелляция"),
          InlineKeyboardButton(text="🚫 Жалоба", callback_data="type_жалоба")],
         [InlineKeyboardButton(text="⭐ Отзыв", callback_data="type_отзыв")]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=kb)
+    ])
 
-# --- COMMANDS ---
+# --- ОБРАБОТКА КОМАНД ---
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
-    await m.answer(
-        "👋 Привет! Выбери нужный раздел ниже:", 
-        reply_markup=main_kb()
-    )
+    await m.answer("👋 Привет! Выбери нужный раздел:", reply_markup=main_kb())
 
 @dp.message(Command("check"))
 async def cmd_check(m: types.Message):
@@ -76,7 +68,7 @@ async def cmd_check(m: types.Message):
     if not bad: await m.answer("Все подтверждены! ✅")
     else: await m.answer("<b>БЕЗ РОЛИ:</b>\n\n" + "\n".join(bad), parse_mode="HTML")
 
-# --- ЛОГИКА ЖАЛОБ / ОТЗЫВОВ / АПЕЛЛЯЦИЙ ---
+# --- ЛОГИКА ЖАЛОБ / ОТЗЫВОВ ---
 
 @dp.callback_query(F.data.startswith("type_"))
 async def process_report_type(call: CallbackQuery, state: FSMContext):
@@ -91,15 +83,9 @@ async def send_report_to_admin(m: types.Message, state: FSMContext):
     data = await state.get_data()
     r_type = data.get("current_report_type", "Сообщение")
     uid = m.from_user.id
-    name = m.from_user.full_name
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Ответить", callback_data=f"adm_msg_{uid}")]
-    ])
-    
-    await bot.send_message(ADMIN_ID, f"📩 <b>НОВАЯ {r_type.upper()}</b>\nОт: {name} (ID: <code>{uid}</code>)\n\nТекст: {m.text}", 
-                           reply_markup=kb, parse_mode="HTML")
-    await m.answer(f"Твой {r_type} успешно отправлен администрации! ✅")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 Ответить", callback_data=f"adm_msg_{uid}")]])
+    await bot.send_message(ADMIN_ID, f"📩 <b>НОВАЯ {r_type.upper()}</b>\nОт: {m.from_user.full_name}\nID: <code>{uid}</code>\n\nТекст: {m.text}", reply_markup=kb, parse_mode="HTML")
+    await m.answer(f"Твой {r_type} отправлен! ✅")
     await state.clear()
 
 # --- АНКЕТА ---
@@ -121,7 +107,7 @@ async def p_user(m: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="Написать", callback_data=f"adm_msg_{uid}")]
     ])
     await bot.send_message(ADMIN_ID, f"🆕 <b>АНКЕТА</b>\nНик: {m.text}\nID: {uid}\nРоль: {role}", reply_markup=kb, parse_mode="HTML")
-    await m.answer("Анкета улетела к админам. Жди! ⏳"); await state.clear()
+    await m.answer("Анкета отправлена!"); await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_"))
 async def admin_btns(call: CallbackQuery, state: FSMContext):
@@ -130,10 +116,10 @@ async def admin_btns(call: CallbackQuery, state: FSMContext):
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, 'Member')")
         conn.commit(); conn.close()
-        await bot.send_message(target_uid, f"Тебя приняли! ✨\nСсылка: {CHAT_LINK}")
+        await bot.send_message(target_uid, f"Принято! ✨\n{CHAT_LINK}")
         await call.message.edit_text(call.message.text + "\n\n✅ СТАТУС: ПРИНЯТ")
     elif action == "no":
-        await bot.send_message(target_uid, "Отказ по анкете. ❌")
+        await bot.send_message(target_uid, "Отклонено. ❌")
         await call.message.edit_text(call.message.text + "\n\n❌ СТАТУС: ОТКЛОНЕН")
     elif action == "msg":
         await call.message.answer(f"Пиши ответ для {target_uid}:")
@@ -144,19 +130,19 @@ async def admin_btns(call: CallbackQuery, state: FSMContext):
 async def admin_reply_send(m: types.Message, state: FSMContext):
     data = await state.get_data(); target = data.get('target_to_msg')
     try:
-        await bot.send_message(target, f"✉️ <b>Ответ администрации:</b>\n\n{m.text}", parse_mode="HTML")
+        await bot.send_message(target, f"✉️ <b>Ответ админа:</b>\n\n{m.text}", parse_mode="HTML")
         await m.answer("Отправлено!")
-    except: await m.answer("Ошибка отправки.")
+    except: await m.answer("Ошибка.")
     await state.clear()
 
 async def main():
-    init_db(); keep_alive()
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Меню"),
-        BotCommand(command="check", description="Проверка")
-    ])
+    init_db()
+    Thread(target=run, daemon=True).start()
+    await bot.set_my_commands([BotCommand(command="start", description="Меню"), BotCommand(command="check", description="Проверка")])
+    # Очистка очереди и запуск
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     asyncio.run(main())
