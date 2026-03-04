@@ -12,17 +12,17 @@ from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
                             InlineKeyboardButton, InlineKeyboardMarkup, 
                             BotCommand, CallbackQuery, ChatJoinRequest)
 
-# --- SERVER ---
+# --- SERVER ДЛЯ RENDER ---
 app = Flask('')
 @app.route('/')
-def home(): return "Бот Harmony активен"
+def home(): return "Бот Harmony: Токен обновлен, система готова!"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- CONFIG ---
-TOKEN = "8344752199:AAFvfamddKvG6KYPJRC-aYa4uWRunQ7nH2s"
+# --- КОНФИГ (ОБНОВЛЕННЫЙ ТОКЕН) ---
+TOKEN = "8344752199:AAF3TjIZPPkye2naM9u5m1M6Hr7Be4KdrPs"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -31,6 +31,7 @@ DB_PATH = "database.db"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+# --- СОСТОЯНИЯ ---
 class RegForm(StatesGroup):
     role = State()
     username = State()
@@ -38,7 +39,7 @@ class RegForm(StatesGroup):
 class AdminChat(StatesGroup):
     waiting_for_reply = State()
 
-# --- DATABASE ---
+# --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS approved_users (user_id INTEGER PRIMARY KEY, role TEXT)")
@@ -50,23 +51,32 @@ def is_approved(uid):
     res = cursor.fetchone(); conn.close()
     return bool(res)
 
-# --- MEMBER TAGS (Новая механика ТГ) ---
+# --- МЕХАНИКА ТЕГОВ (MEMBER TAGS) ---
 async def set_member_tag(uid, tag_text):
     try:
-        await bot.make_request("setChatMemberTag", {"chat_id": CHAT_ID, "user_id": uid, "tag": tag_text})
-    except Exception as e: logging.error(f"Tag error: {e}")
+        # Используем метод Telegram API для плашек (доступен ботам-админам)
+        await bot.make_request("setChatMemberTag", {
+            "chat_id": CHAT_ID,
+            "user_id": uid,
+            "tag": tag_text
+        })
+    except Exception as e:
+        logging.error(f"Ошибка установки тега: {e}")
 
-# --- АВТО-ПРИЕМ ЗАЯВОК ---
+# --- АВТОМАТИЧЕСКИЙ ПРИЕМ ЗАЯВОК ---
 @dp.chat_join_request()
 async def auto_approve(request: ChatJoinRequest):
     try:
         await request.approve()
         await bot.send_message(
             request.from_user.id, 
-            f"✅ Твоя заявка одобрена!\nЧтобы получить роль и плашку в чате, нажми <b>📝 Вступить</b>",
-            reply_markup=get_main_kb(), parse_mode="HTML"
+            "<b>Добро пожаловать!</b> ✅ Твоя заявка одобрена автоматически.\n\n"
+            "Чтобы получить роль и плашку в чате, нажми <b>📝 Вступить</b>.",
+            reply_markup=get_main_kb(),
+            parse_mode="HTML"
         )
-    except Exception as e: logging.error(f"Join error: {e}")
+    except Exception as e:
+        logging.error(f"Ошибка Join Request: {e}")
 
 # --- КЛАВИАТУРА ---
 def get_main_kb():
@@ -79,7 +89,7 @@ def get_main_kb():
 async def cmd_start(m: types.Message):
     await m.answer("Панель Harmony активирована.", reply_markup=get_main_kb())
 
-# --- АДМИН КОМАНДЫ ADD / DEL ---
+# --- КОМАНДЫ ADD / DEL ---
 @dp.message(Command("add"))
 async def cmd_add(m: types.Message):
     if m.from_user.id != ADMIN_ID: return
@@ -102,10 +112,10 @@ async def cmd_del(m: types.Message):
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
         conn.commit(); conn.close()
         await set_member_tag(uid, "")
-        await m.answer(f"❌ Удален {uid}, тег снят.")
+        await m.answer(f"❌ Пользователь {uid} удален из базы, тег снят.")
     except: await m.answer("Формат: /del ID")
 
-# --- ОБРАБОТКА АНКЕТЫ ---
+# --- ОДОБРЕНИЕ И СОЗЫВ ---
 @dp.callback_query(F.data.startswith("adm_ok_"))
 async def approve(call: CallbackQuery):
     uid = int(call.data.split("_")[2])
@@ -117,13 +127,17 @@ async def approve(call: CallbackQuery):
     cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
     conn.commit(); conn.close()
     
-    await set_member_tag(uid, role)
+    # 1. Ссылка пользователю
     await bot.send_message(uid, f"Твоя роль <b>{role}</b> подтверждена!\nВступай в чат: {CHAT_LINK}", parse_mode="HTML")
     await call.message.edit_text(call.message.text + "\n✅ ПОДТВЕРЖДЕНО")
     
-    # ТРИГГЕР ДЛЯ ЗАЗЫВАЛЫ (ОБНОВЛЕННЫЙ)
+    # 2. Ставим плашку
+    await set_member_tag(uid, role)
+    
+    # 3. Вызов Зазывалы
     await bot.send_message(CHAT_ID, f"/call@ZazyvalaTag1Bot пришел новый участник с ролью: {role}")
 
+# --- ЧАТ С АДМИНОМ ---
 @dp.callback_query(F.data.startswith("chat_with_"))
 async def start_reply(call: CallbackQuery, state: FSMContext):
     target_id = int(call.data.split("_")[2])
@@ -145,7 +159,7 @@ async def send_reply(m: types.Message, state: FSMContext):
 # --- РЕГИСТРАЦИЯ ---
 @dp.message(F.text == "📝 Вступить")
 async def start_reg(m: types.Message, state: FSMContext):
-    await m.answer("Напиши свою роль:"); await state.set_state(RegForm.role)
+    await m.answer("Напиши свою роль (плашку):"); await state.set_state(RegForm.role)
 
 @dp.message(RegForm.role)
 async def p_role(m: types.Message, state: FSMContext):
