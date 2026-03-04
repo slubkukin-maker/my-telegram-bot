@@ -11,17 +11,17 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup, 
                             BotCommand, CallbackQuery, ChatJoinRequest)
 
-# --- SERVER ---
+# --- SERVER ДЛЯ RENDER ---
 app = Flask('')
 @app.route('/')
-def home(): return "Бот живет!"
+def home(): return "Бот работает на новом токене!"
 
 def run():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
 # --- CONFIG ---
-TOKEN = "8344752199:AAEuPor3OXH890Z9XMKBVLRQWWEx6f9a9Sw"
+TOKEN = "8344752199:AAEoFYozZQAj0Vk1EZLDUkh09jF_o9WPQwI"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -30,7 +30,7 @@ DB_PATH = "database.db"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- STATES ---
+# --- СТРУКТУРА ДАННЫХ ---
 class RegForm(StatesGroup):
     role = State()
     username = State()
@@ -44,7 +44,7 @@ class ComplaintForm(StatesGroup):
 class FeedbackForm(StatesGroup):
     text = State()
 
-# --- DATABASE ---
+# --- РАБОТА С БАЗОЙ ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -59,26 +59,26 @@ def get_uid_by_role(role_name):
     res = cursor.fetchone(); conn.close()
     return res[0] if res else None
 
-# --- ГЛАВНОЕ МЕНЮ ---
+# --- МЕНЮ ---
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Вступить", callback_data="reg")],
         [InlineKeyboardButton(text="🚨 Жалоба", callback_data="complaint"),
-         InlineKeyboardButton(text="📩 Отзыв (анонимно)", callback_data="feedback")]
+         InlineKeyboardButton(text="📩 Анонимный отзыв", callback_data="feedback")]
     ])
-    await m.answer("Добро пожаловать! Выберите действие:", reply_markup=kb)
+    await m.answer("Меню управления участниками:", reply_markup=kb)
 
-# --- ЛОГИКА ОТЗЫВОВ ---
+# --- АНОНИМНЫЕ ОТЗЫВЫ ---
 @dp.callback_query(F.data == "feedback")
 async def start_fb(call: CallbackQuery, state: FSMContext):
-    await call.message.answer("Напишите ваш анонимный отзыв (его увидит только админ):")
+    await call.message.answer("Напишите ваш анонимный отзыв:")
     await state.set_state(FeedbackForm.text); await call.answer()
 
 @dp.message(FeedbackForm.text)
 async def process_fb(m: types.Message, state: FSMContext):
-    await bot.send_message(ADMIN_ID, f"<b>📥 НОВЫЙ ОТЗЫВ</b>\n\n{m.text}", parse_mode="HTML")
-    await m.answer("Спасибо! Ваш отзыв отправлен анонимно."); await state.clear()
+    await bot.send_message(ADMIN_ID, f"<b>📥 АНОНИМНЫЙ ОТЗЫВ</b>\n\n{m.text}", parse_mode="HTML")
+    await m.answer("Отправлено анонимно."); await state.clear()
 
 # --- РЕГИСТРАЦИЯ ---
 @dp.callback_query(F.data == "reg")
@@ -102,7 +102,7 @@ async def p_user(m: types.Message, state: FSMContext):
     await bot.send_message(ADMIN_ID, f"<b>АНКЕТА</b>\nЮЗ: {m.text}\nID: {uid}\nРОЛЬ: {data['role']}", reply_markup=kb, parse_mode="HTML")
     await m.answer("Заявка отправлена."); await state.clear()
 
-# --- ЖАЛОБЫ (n/3) ---
+# --- ЖАЛОБЫ ---
 @dp.callback_query(F.data == "complaint")
 async def start_comp(call: CallbackQuery, state: FSMContext):
     await call.message.answer("Назовите ВАШУ роль:")
@@ -111,8 +111,7 @@ async def start_comp(call: CallbackQuery, state: FSMContext):
 @dp.message(ComplaintForm.my_role)
 async def comp_my_role(m: types.Message, state: FSMContext):
     if not get_uid_by_role(m.text):
-        await m.answer("Такой роли нет. Проверьте написание:")
-        return
+        await m.answer("Такой роли не существует. Проверьте правильность:"); return
     await state.update_data(my_role=m.text)
     await m.answer("Суть жалобы:")
     await state.set_state(ComplaintForm.text)
@@ -120,13 +119,13 @@ async def comp_my_role(m: types.Message, state: FSMContext):
 @dp.message(ComplaintForm.text)
 async def comp_text(m: types.Message, state: FSMContext):
     await state.update_data(text=m.text)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Без файлов ➡️", callback_data="skip_file")]])
-    await m.answer("Прикрепите файлы (доказательства) или нажмите кнопку:", reply_markup=kb)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отправить без файлов ➡️", callback_data="skip_file")]])
+    await m.answer("Прикрепите доказательства или нажмите кнопку:", reply_markup=kb)
     await state.set_state(ComplaintForm.evidence)
 
 @dp.callback_query(F.data == "skip_file", ComplaintForm.evidence)
 @dp.message(ComplaintForm.evidence)
-async def comp_target(msg: types.Message | CallbackQuery, state: FSMContext):
+async def comp_target_role(msg: types.Message | CallbackQuery, state: FSMContext):
     if isinstance(msg, types.Message):
         file_id = msg.photo[-1].file_id if msg.photo else (msg.document.file_id if msg.document else None)
         await state.update_data(file=file_id)
@@ -140,21 +139,21 @@ async def comp_target(msg: types.Message | CallbackQuery, state: FSMContext):
 async def comp_final(m: types.Message, state: FSMContext):
     target_uid = get_uid_by_role(m.text)
     if not target_uid:
-        await m.answer("Нарушитель с такой ролью не найден. Попробуйте еще раз:"); return
+        await m.answer("Роль нарушителя не найдена. Попробуйте снова:"); return
     
     data = await state.get_data()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Выдать варн ✅", callback_data=f"warn_ok_{target_uid}"),
+        [InlineKeyboardButton(text="Одобрить ✅", callback_data=f"warn_ok_{target_uid}"),
          InlineKeyboardButton(text="Отклонить ❌", callback_data=f"warn_no")]
     ])
     cap = f"<b>🚨 ЖАЛОБА</b>\nОт: {data['my_role']}\nНа: {m.text}\nСуть: {data['text']}"
     if data.get('file'): await bot.send_photo(ADMIN_ID, data['file'], caption=cap, reply_markup=kb, parse_mode="HTML")
     else: await bot.send_message(ADMIN_ID, cap, reply_markup=kb, parse_mode="HTML")
-    await m.answer("Жалоба отправлена."); await state.clear()
+    await m.answer("Жалоба ушла админу."); await state.clear()
 
-# --- КНОПКИ АДМИНА (ВАРНЫ) ---
+# --- ОБРАБОТКА ВАРНОВ ---
 @dp.callback_query(F.data.startswith("warn_"))
-async def admin_warns(call: CallbackQuery):
+async def handle_warn(call: CallbackQuery):
     if "no" in call.data:
         await call.message.edit_text(call.message.text + "\n\n❌ Отклонено"); return
     
@@ -165,18 +164,35 @@ async def admin_warns(call: CallbackQuery):
     v_count = cursor.fetchone()[0]
     
     if v_count >= 3:
-        await bot.ban_chat_member(CHAT_ID, target_uid)
+        try: await bot.ban_chat_member(CHAT_ID, target_uid)
+        except: pass
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (target_uid,))
-        await bot.send_message(target_uid, "Вы забанены за 3/3 нарушений.")
-        await call.message.edit_text(call.message.text + "\n\n🔥 ЗАБАНЕН (3/3)")
+        await bot.send_message(target_uid, "Вы удалены за 3/3 нарушений.")
+        await call.message.edit_text(call.message.text + "\n\n🔥 БАН (3/3)")
     else:
-        await bot.send_message(target_uid, f"За вами замечено {v_count}/3 нарушений. Будьте внимательнее!")
-        await call.message.edit_text(call.message.text + f"\n\n✅ Варн выдан ({v_count}/3)")
+        await bot.send_message(target_uid, f"За вами замечено {v_count}/3 нарушений. Будьте внимательнее.")
+        await call.message.edit_text(call.message.text + f"\n\n✅ Варн {v_count}/3")
     conn.commit(); conn.close()
 
-# --- АВТО-ПРИНЯТИЕ И НОВЫЙ ТЕГ (API 12.5) ---
+# --- КНОПКИ ПРИНЯТИЯ В ЧАТ ---
+@dp.callback_query(F.data.startswith("adm_"))
+async def admin_reg_confirm(call: CallbackQuery):
+    action, uid = call.data.split("_")[1], int(call.data.split("_")[2])
+    if action == "ok":
+        # Роль берем из текста сообщения
+        role = call.message.text.split("РОЛЬ: ")[1]
+        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
+        conn.commit(); conn.close()
+        await bot.send_message(uid, f"Вы приняты! Роль: {role}\nВступайте: {CHAT_LINK}")
+        await call.message.edit_text(call.message.text + "\n\n✅ ОДОБРЕНО")
+    else:
+        await bot.send_message(uid, "Заявка отклонена.")
+        await call.message.edit_text(call.message.text + "\n\n❌ ОТКЛОНЕНО")
+
+# --- АВТО-ПРИНЯТИЕ И ПЛАШКА (Member Tag) ---
 @dp.chat_join_request()
-async def approve_and_tag(req: ChatJoinRequest):
+async def auto_approve_logic(req: ChatJoinRequest):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (req.from_user.id,))
     res = cursor.fetchone(); conn.close()
@@ -184,10 +200,12 @@ async def approve_and_tag(req: ChatJoinRequest):
         await req.approve()
         await asyncio.sleep(1)
         try:
-            # Новый метод Telegram для установки плашки БЕЗ админки
+            # Новый метод Telegram для установки плашки участнику (БЕЗ админки)
             await bot.make_request("setChatMemberTag", {"chat_id": CHAT_ID, "user_id": req.from_user.id, "tag": res[0]})
-        except: pass
+        except Exception as e:
+            logging.error(f"Ошибка тега: {e}")
 
+# --- ЗАПУСК ---
 async def main():
     init_db()
     Thread(target=run, daemon=True).start()
