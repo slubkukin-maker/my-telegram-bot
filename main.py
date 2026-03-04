@@ -15,13 +15,13 @@ from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
 # --- SERVER ДЛЯ RENDER ---
 app = Flask('')
 @app.route('/')
-def home(): return "Бот Harmony: Токен обновлен, система готова!"
+def home(): return "Бот Harmony работает"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- КОНФИГ (ОБНОВЛЕННЫЙ ТОКЕН) ---
+# --- КОНФИГ ---
 TOKEN = "8344752199:AAF3TjIZPPkye2naM9u5m1M6Hr7Be4KdrPs"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
@@ -54,14 +54,13 @@ def is_approved(uid):
 # --- МЕХАНИКА ТЕГОВ (MEMBER TAGS) ---
 async def set_member_tag(uid, tag_text):
     try:
-        # Используем метод Telegram API для плашек (доступен ботам-админам)
         await bot.make_request("setChatMemberTag", {
             "chat_id": CHAT_ID,
             "user_id": uid,
             "tag": tag_text
         })
     except Exception as e:
-        logging.error(f"Ошибка установки тега: {e}")
+        logging.error(f"Ошибка Member Tag: {e}")
 
 # --- АВТОМАТИЧЕСКИЙ ПРИЕМ ЗАЯВОК ---
 @dp.chat_join_request()
@@ -112,10 +111,10 @@ async def cmd_del(m: types.Message):
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
         conn.commit(); conn.close()
         await set_member_tag(uid, "")
-        await m.answer(f"❌ Пользователь {uid} удален из базы, тег снят.")
+        await m.answer(f"❌ Пользователь {uid} удален, тег снят.")
     except: await m.answer("Формат: /del ID")
 
-# --- ОДОБРЕНИЕ И СОЗЫВ ---
+# --- ОДОБРЕНИЕ / ОТКЛОНЕНИЕ / СОЗЫВ ---
 @dp.callback_query(F.data.startswith("adm_ok_"))
 async def approve(call: CallbackQuery):
     uid = int(call.data.split("_")[2])
@@ -127,15 +126,17 @@ async def approve(call: CallbackQuery):
     cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
     conn.commit(); conn.close()
     
-    # 1. Ссылка пользователю
     await bot.send_message(uid, f"Твоя роль <b>{role}</b> подтверждена!\nВступай в чат: {CHAT_LINK}", parse_mode="HTML")
     await call.message.edit_text(call.message.text + "\n✅ ПОДТВЕРЖДЕНО")
     
-    # 2. Ставим плашку
     await set_member_tag(uid, role)
-    
-    # 3. Вызов Зазывалы
     await bot.send_message(CHAT_ID, f"/call@ZazyvalaTag1Bot пришел новый участник с ролью: {role}")
+
+@dp.callback_query(F.data.startswith("adm_no_"))
+async def reject(call: CallbackQuery):
+    uid = int(call.data.split("_")[2])
+    await bot.send_message(uid, "К сожалению, твоя заявка на роль была отклонена.")
+    await call.message.edit_text(call.message.text + "\n❌ ОТКЛОНЕНО")
 
 # --- ЧАТ С АДМИНОМ ---
 @dp.callback_query(F.data.startswith("chat_with_"))
@@ -143,7 +144,7 @@ async def start_reply(call: CallbackQuery, state: FSMContext):
     target_id = int(call.data.split("_")[2])
     await state.update_data(reply_to=target_id)
     await state.set_state(AdminChat.waiting_for_reply)
-    await call.message.answer(f"Введите ответ для пользователя {target_id}:")
+    await call.message.answer(f"Введите сообщение для {target_id}:")
     await call.answer()
 
 @dp.message(AdminChat.waiting_for_reply)
@@ -159,7 +160,7 @@ async def send_reply(m: types.Message, state: FSMContext):
 # --- РЕГИСТРАЦИЯ ---
 @dp.message(F.text == "📝 Вступить")
 async def start_reg(m: types.Message, state: FSMContext):
-    await m.answer("Напиши свою роль (плашку):"); await state.set_state(RegForm.role)
+    await m.answer("Напиши свою роль:"); await state.set_state(RegForm.role)
 
 @dp.message(RegForm.role)
 async def p_role(m: types.Message, state: FSMContext):
@@ -169,8 +170,10 @@ async def p_role(m: types.Message, state: FSMContext):
 @dp.message(RegForm.username)
 async def p_user(m: types.Message, state: FSMContext):
     data = await state.get_data()
+    # КНОПКИ ДЛЯ АДМИНА
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Принять ✅", callback_data=f"adm_ok_{m.from_user.id}")],
+        [InlineKeyboardButton(text="Отклонить ❌", callback_data=f"adm_no_{m.from_user.id}")],
         [InlineKeyboardButton(text="Написать 💬", callback_data=f"chat_with_{m.from_user.id}")]
     ])
     await bot.send_message(ADMIN_ID, f"<b>АНКЕТА</b>\nЮЗ: {m.text}\nID: {m.from_user.id}\nРОЛЬ: {data['role']}", reply_markup=kb, parse_mode="HTML")
