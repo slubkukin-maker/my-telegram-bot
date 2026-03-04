@@ -25,6 +25,7 @@ def keep_alive():
     t.start()
 
 # --- CONFIG ---
+# ВНИМАНИЕ: Проверь, не потерялся ли символ в конце токена!
 TOKEN = "8344752199:AAEM_QXGdVx5t8XkQCMWQlCKubhwBaeMvTo"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
