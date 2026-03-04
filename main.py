@@ -53,6 +53,7 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute("""CREATE TABLE IF NOT EXISTS approved_users 
                    (user_id INTEGER PRIMARY KEY, role TEXT, username TEXT, violations INTEGER DEFAULT 0)""")
+    # Таблица для созыва (все, кого бот "видел")
     cursor.execute("CREATE TABLE IF NOT EXISTS all_users (user_id INTEGER PRIMARY KEY, name TEXT)")
     conn.commit(); conn.close()
 
@@ -68,7 +69,41 @@ def get_uid_by_role(role_name):
     res = cursor.fetchone(); conn.close()
     return res[0] if res else None
 
-# --- КЛАВИАТУРА ---
+# --- АВТОМАТИЧЕСКИЙ СБОР ЮЗЕРОВ В ЧАТЕ ---
+@dp.message(F.chat.id == CHAT_ID)
+async def auto_collect(m: types.Message):
+    if m.from_user.is_bot: return
+    name = m.from_user.full_name
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (m.from_user.id, name))
+    conn.commit(); conn.close()
+
+# --- ЛОГИКА СОЗЫВА ---
+async def global_call(new_user_role):
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM all_users"); rows = cursor.fetchall(); conn.close()
+    
+    try:
+        total_in_chat = await bot.get_chat_member_count(CHAT_ID)
+        total_humans = total_in_chat - 1 # Без бота
+    except:
+        total_humans = len(rows) if len(rows) > 0 else 1
+
+    # Формируем упоминания (через невидимый пробел или точку)
+    # Используем [ . ] как якорь для тега
+    mentions = [f"<a href='tg://user?id={r[0]}'>.</a>" for r in rows]
+    called_count = len(mentions)
+    
+    text = (f"📣 <b>СОЗЫВ: новый участник</b>\n"
+            f"Роль: <b>{new_user_role}</b>\n\n"
+            f"👥 Созвано: <b>{called_count}/{total_humans}</b>")
+    
+    # Отправляем пачками по 5 штук, чтобы точно сработало уведомление
+    for i in range(0, len(mentions), 5):
+        chunk = "".join(mentions[i:i+5])
+        await bot.send_message(CHAT_ID, f"{text}{chunk}", parse_mode="HTML")
+
+# --- МЕНЮ КОМАНД ---
 def get_main_reply_kb(uid):
     buttons = []
     if not is_user_approved(uid):
@@ -78,56 +113,29 @@ def get_main_reply_kb(uid):
         buttons.append([KeyboardButton(text="🛡 Апелляция")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
-# --- ЛОГИКА СОЗЫВА ---
-async def global_call(new_user_role):
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("SELECT user_id, name FROM all_users"); rows = cursor.fetchall(); conn.close()
-    
-    # Считаем реальных людей в чате через API
-    try:
-        total_in_chat = await bot.get_chat_member_count(CHAT_ID)
-        total_humans = total_in_chat - 1 # Вычитаем самого бота
-    except:
-        total_humans = len(rows)
-
-    mentions = [f"<a href='tg://user?id={r[0]}'>\u2063</a>" for r in rows] # Скрытые теги, чтобы не спамить именами
-    called_count = len(mentions)
-    
-    text = (f"📣 <b>СОЗЫВ: новый участник</b>\n"
-            f"Роль: <b>{new_user_role}</b>\n\n"
-            f"👥 Созвано: <b>{called_count}/{total_humans}</b>")
-    
-    # Отправляем по 5 тегов в сообщении, чтобы не словить лимит
-    for i in range(0, len(mentions), 5):
-        chunk = "".join(mentions[i:i+5])
-        await bot.send_message(CHAT_ID, f"{text}{chunk}", parse_mode="HTML")
-
-# --- ОБРАБОТЧИКИ ---
-
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     await m.answer("Панель управления активирована.", reply_markup=get_main_reply_kb(m.from_user.id))
 
-@dp.message(F.text == "📝 Вступить")
-async def btn_reg(m: types.Message, state: FSMContext):
-    if is_user_approved(m.from_user.id): return
-    await m.answer("Укажите вашу роль:"); await state.set_state(RegForm.role)
+# --- ПРИНЯТИЕ И СОЗЫВ ---
+@dp.callback_query(F.data.startswith("adm_"))
+async def admin_reg_confirm(call: CallbackQuery):
+    action, uid = call.data.split("_")[1], int(call.data.split("_")[2])
+    if action == "ok":
+        role = call.message.text.split("РОЛЬ: ")[1]
+        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
+        conn.commit(); conn.close()
+        
+        await bot.send_message(uid, f"Принято! Роль: {role}\n{CHAT_LINK}", reply_markup=get_main_reply_kb(uid))
+        await call.message.edit_text(call.message.text + "\n\n✅ ОДОБРЕНО")
+        
+        # ЗАПУСК СОЗЫВА
+        await global_call(role)
+    else:
+        await bot.send_message(uid, "Отклонено."); await call.message.edit_text(call.message.text + "\n\n❌ ОТКЛОНЕНО")
 
-@dp.message(F.text == "🚨 Подать жалобу")
-async def btn_complaint(m: types.Message, state: FSMContext):
-    await m.answer("Назовите ВАШУ роль в системе:"); await state.set_state(ComplaintForm.my_role)
-
-@dp.message(F.text == "📩 Оставить отзыв")
-async def btn_feedback(m: types.Message, state: FSMContext):
-    await m.answer("Напишите ваш анонимный отзыв:"); await state.set_state(FeedbackForm.text)
-
-@dp.message(F.text == "🛡 Апелляция")
-async def btn_appeal(m: types.Message, state: FSMContext):
-    if not is_user_approved(m.from_user.id): return
-    await m.answer("Опишите причину апелляции:"); await state.set_state(AppealForm.text)
-
-# --- АДМИН КОМАНДЫ ---
-
+# --- ОСТАЛЬНЫЕ КОМАНДЫ (ADD, DEL, LIST) ---
 @dp.message(Command("list"))
 async def cmd_list(m: types.Message):
     if m.from_user.id != ADMIN_ID: return
@@ -160,8 +168,26 @@ async def cmd_delete(m: types.Message):
         await m.answer(f"✅ {tid} удален.")
     except: await m.answer("Формат: `/del ID`", parse_mode="Markdown")
 
-# --- АНКЕТЫ И ПРИНЯТИЕ ---
+# --- ЛОГИКА КНОПОК РЕПЛАЙ ---
+@dp.message(F.text == "📝 Вступить")
+async def btn_reg(m: types.Message, state: FSMContext):
+    if is_user_approved(m.from_user.id): return
+    await m.answer("Укажите вашу роль:"); await state.set_state(RegForm.role)
 
+@dp.message(F.text == "🚨 Подать жалобу")
+async def btn_complaint(m: types.Message, state: FSMContext):
+    await m.answer("Назовите ВАШУ роль в системе:"); await state.set_state(ComplaintForm.my_role)
+
+@dp.message(F.text == "📩 Оставить отзыв")
+async def btn_feedback(m: types.Message, state: FSMContext):
+    await m.answer("Напишите ваш анонимный отзыв:"); await state.set_state(FeedbackForm.text)
+
+@dp.message(F.text == "🛡 Апелляция")
+async def btn_appeal(m: types.Message, state: FSMContext):
+    if not is_user_approved(m.from_user.id): return
+    await m.answer("Опишите причину апелляции:"); await state.set_state(AppealForm.text)
+
+# --- АНКЕТА ---
 @dp.message(RegForm.role)
 async def p_role(m: types.Message, state: FSMContext):
     await state.update_data(role=m.text); await m.answer("Укажите ваш юз:"); await state.set_state(RegForm.username)
@@ -169,32 +195,11 @@ async def p_role(m: types.Message, state: FSMContext):
 @dp.message(RegForm.username)
 async def p_user(m: types.Message, state: FSMContext):
     data = await state.get_data()
-    name = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
-    # Сразу сохраняем в общую базу всех (для созыва)
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (m.from_user.id, name))
-    conn.commit(); conn.close()
-    
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Принять ✅", callback_data=f"adm_ok_{m.from_user.id}"), InlineKeyboardButton(text="Отклонить ❌", callback_data=f"adm_no_{m.from_user.id}")]])
     await bot.send_message(ADMIN_ID, f"<b>АНКЕТА</b>\nЮЗ: {m.text}\nID: {m.from_user.id}\nРОЛЬ: {data['role']}", reply_markup=kb, parse_mode="HTML")
     await m.answer("Заявка отправлена."); await state.clear()
 
-@dp.callback_query(F.data.startswith("adm_"))
-async def admin_reg_confirm(call: CallbackQuery):
-    action, uid = call.data.split("_")[1], int(call.data.split("_")[2])
-    if action == "ok":
-        role = call.message.text.split("РОЛЬ: ")[1]
-        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
-        conn.commit(); conn.close()
-        await bot.send_message(uid, f"Принято! Роль: {role}\n{CHAT_LINK}", reply_markup=get_main_reply_kb(uid))
-        await call.message.edit_text(call.message.text + "\n\n✅ ОДОБРЕНО")
-        # ВЫЗОВ СОЗЫВА
-        await global_call(role)
-    else:
-        await bot.send_message(uid, "Отклонено."); await call.message.edit_text(call.message.text + "\n\n❌ ОТКЛОНЕНО")
-
-# --- СИСТЕМА ЖАЛОБ И ОТЗЫВОВ ---
+# --- ЖАЛОБЫ ---
 @dp.message(ComplaintForm.my_role)
 async def comp_my_role(m: types.Message, state: FSMContext):
     if not get_uid_by_role(m.text): await m.answer("Нет такой роли!"); return
@@ -247,10 +252,10 @@ async def handle_warn(call: CallbackQuery):
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (tuid,))
         await bot.send_message(tuid, "Бан 3/3."); await call.message.edit_text("🔥 Игрок забанен")
     else:
-        await bot.send_message(tuid, f"Варн {v}/3."); await call.message.edit_text(f"✅ Выдан варн {v}/3")
+        await bot.send_message(tuid, f"Предупреждение {v}/3."); await call.message.edit_text(f"✅ Выдан варн {v}/3")
     conn.commit(); conn.close()
 
-# --- ПЛАШКИ ---
+# --- ПЛАШКИ ПРИ ВХОДЕ ---
 @dp.chat_join_request()
 async def auto_approve_logic(req: ChatJoinRequest):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
@@ -266,12 +271,11 @@ async def main():
     init_db()
     Thread(target=run, daemon=True).start()
     await bot.delete_webhook(drop_pending_updates=True)
-    # Настройка команд для меню
     await bot.set_my_commands([
-        BotCommand(command="start", description="Обновить меню"),
-        BotCommand(command="list", description="Список базы"),
-        BotCommand(command="add", description="Добавить (ID РОЛЬ)"),
-        BotCommand(command="del", description="Удалить (ID)")
+        BotCommand(command="start", description="Меню"),
+        BotCommand(command="list", description="База участников"),
+        BotCommand(command="add", description="Добавить ID РОЛЬ"),
+        BotCommand(command="del", description="Удалить ID")
     ])
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_join_request"])
 
