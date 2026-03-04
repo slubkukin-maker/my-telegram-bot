@@ -50,7 +50,7 @@ def is_approved(uid):
     res = cursor.fetchone(); conn.close()
     return bool(res)
 
-# --- MEMBER TAGS ---
+# --- MEMBER TAGS (Новая механика ТГ) ---
 async def set_member_tag(uid, tag_text):
     try:
         await bot.make_request("setChatMemberTag", {"chat_id": CHAT_ID, "user_id": uid, "tag": tag_text})
@@ -79,7 +79,7 @@ def get_main_kb():
 async def cmd_start(m: types.Message):
     await m.answer("Панель Harmony активирована.", reply_markup=get_main_kb())
 
-# --- КОМАНДЫ ADD / DEL ---
+# --- АДМИН КОМАНДЫ ADD / DEL ---
 @dp.message(Command("add"))
 async def cmd_add(m: types.Message):
     if m.from_user.id != ADMIN_ID: return
@@ -118,12 +118,11 @@ async def approve(call: CallbackQuery):
     conn.commit(); conn.close()
     
     await set_member_tag(uid, role)
-    # ТЕПЕРЬ ОТПРАВЛЯЕТ ССЫЛКУ НА ЧАТ
     await bot.send_message(uid, f"Твоя роль <b>{role}</b> подтверждена!\nВступай в чат: {CHAT_LINK}", parse_mode="HTML")
     await call.message.edit_text(call.message.text + "\n✅ ПОДТВЕРЖДЕНО")
     
-    # ТРИГГЕР ЗАЗЫВАЛЫ
-    await bot.send_message(CHAT_ID, f"Калл пришел новый участник с ролью: {role}")
+    # ТРИГГЕР ДЛЯ ЗАЗЫВАЛЫ (ОБНОВЛЕННЫЙ)
+    await bot.send_message(CHAT_ID, f"/call@ZazyvalaTag1Bot пришел новый участник с ролью: {role}")
 
 @dp.callback_query(F.data.startswith("chat_with_"))
 async def start_reply(call: CallbackQuery, state: FSMContext):
@@ -156,7 +155,6 @@ async def p_role(m: types.Message, state: FSMContext):
 @dp.message(RegForm.username)
 async def p_user(m: types.Message, state: FSMContext):
     data = await state.get_data()
-    # КНОПКИ ПРИНЯТЬ И НАПИСАТЬ
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Принять ✅", callback_data=f"adm_ok_{m.from_user.id}")],
         [InlineKeyboardButton(text="Написать 💬", callback_data=f"chat_with_{m.from_user.id}")]
