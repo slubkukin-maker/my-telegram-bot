@@ -15,13 +15,13 @@ from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
 # --- SERVER ДЛЯ RENDER ---
 app = Flask('')
 @app.route('/')
-def home(): return "Harmony Bot: Active"
+def home(): return "Harmony Bot: Плашки и Созыв активны!"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- КОНФИГ ---
+# --- КОНФИГ (ТВОЙ НОВЫЙ ТОКЕН) ---
 TOKEN = "8344752199:AAGzVYnAgUFW72XG1lnR26QrZPFFj12WbiE"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
@@ -50,17 +50,28 @@ def get_all_users():
     users = [row[0] for row in cursor.fetchall()]; conn.close()
     return users
 
-# --- МЕХАНИКА ТЕГОВ (MEMBER TAGS) ---
+# --- НОВАЯ ФУНКЦИЯ: УСТАНОВКА ПЛАШКИ (MEMBER TAG) ---
 async def set_member_tag(uid, tag_text):
     try:
-        await bot.make_request("setChatMemberTag", {"chat_id": CHAT_ID, "user_id": uid, "tag": tag_text})
-    except Exception as e: logging.error(f"Tag error: {e}")
+        # Официальный метод Telegram для установки тега (плашки) участника
+        await bot.make_request("setChatMemberTag", {
+            "chat_id": CHAT_ID,
+            "user_id": uid,
+            "tag": tag_text
+        })
+        logging.info(f"Плашка '{tag_text}' установлена для {uid}")
+    except Exception as e:
+        logging.error(f"Ошибка установки плашки: {e}")
 
-# --- УМНЫЙ СОЗЫВ ---
+# --- УМНЫЙ СОЗЫВ (ПАЧКАМИ ПО 5) ---
 async def internal_call(new_member_role):
     users = get_all_users()
     if not users: return
+    
+    # Главное сообщение
     await bot.send_message(CHAT_ID, f"📢 <b>Общий сбор!</b>\nПришел новый участник с ролью: <b>{new_member_role}</b>", parse_mode="HTML")
+
+    # Скрытые теги по 5 штук для пуш-уведомлений
     chunk_size = 5
     for i in range(0, len(users), chunk_size):
         chunk = users[i:i + chunk_size]
@@ -70,47 +81,59 @@ async def internal_call(new_member_role):
             await asyncio.sleep(0.6)
         except: pass
 
-# --- АВТО-ПРИЕМ ---
+# --- АВТО-ПРИЕМ ЗАЯВОК ---
 @dp.chat_join_request()
 async def auto_approve(request: ChatJoinRequest):
     try:
         await request.approve()
-        await bot.send_message(request.from_user.id, "✅ Заявка одобрена! Нажми <b>📝 Вступить</b> для анкеты.", reply_markup=get_main_kb(), parse_mode="HTML")
+        await bot.send_message(
+            request.from_user.id, 
+            "<b>Добро пожаловать!</b> ✅ Заявка одобрена.\n\nНажми <b>📝 Вступить</b>, чтобы заполнить анкету и получить роль/плашку.",
+            reply_markup=get_main_kb(), parse_mode="HTML"
+        )
     except: pass
 
+# --- КЛАВИАТУРА ---
 def get_main_kb():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📝 Вступить")]], resize_keyboard=True)
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
-    await m.answer("Бот Harmony запущен.", reply_markup=get_main_kb())
+    await m.answer("Бот Harmony запущен и готов выдавать плашки.", reply_markup=get_main_kb())
 
-# --- ОБРАБОТКА АНКЕТЫ ---
+# --- ОБРАБОТКА АНКЕТЫ (ПРИНЯТИЕ + ПЛАШКА) ---
 @dp.callback_query(F.data.startswith("adm_ok_"))
 async def approve(call: CallbackQuery):
     uid = int(call.data.split("_")[2])
+    # Достаем роль из текста анкеты
     role = call.message.text.split("РОЛЬ: ")[1].split("\n")[0].strip() if "РОЛЬ: " in call.message.text else "Участник"
+    
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
     conn.commit(); conn.close()
+    
+    # !!! ТУТ БОТ АВТОМАТИЧЕСКИ ПОДПИСЫВАЕТ ТЕГ (ПЛАШКУ) !!!
     await set_member_tag(uid, role)
-    await bot.send_message(uid, f"Твоя роль <b>{role}</b> подтверждена!\nВступай: {CHAT_LINK}", parse_mode="HTML")
-    await call.message.edit_text(call.message.text + "\n✅ ПРИНЯТ")
+    
+    await bot.send_message(uid, f"Твоя роль <b>{role}</b> подтверждена!\nВступай в чат: {CHAT_LINK}", parse_mode="HTML")
+    await call.message.edit_text(call.message.text + f"\n✅ ПРИНЯТ. ПЛАШКА '{role}' ВЫДАНА.")
+    
+    # Запуск созыва
     await internal_call(role)
 
 @dp.callback_query(F.data.startswith("adm_no_"))
 async def reject(call: CallbackQuery):
     uid = int(call.data.split("_")[2])
-    await bot.send_message(uid, "Заявка отклонена.")
+    await bot.send_message(uid, "Заявка отклонена администрацией.")
     await call.message.edit_text(call.message.text + "\n❌ ОТКЛОНЕНО")
 
-# --- ФУНКЦИЯ «НАПИСАТЬ СООБЩЕНИЕ» ---
+# --- ЧАТ С ПОЛЬЗОВАТЕЛЕМ ---
 @dp.callback_query(F.data.startswith("chat_with_"))
 async def start_reply(call: CallbackQuery, state: FSMContext):
     target_id = int(call.data.split("_")[2])
     await state.update_data(reply_to=target_id)
     await state.set_state(AdminChat.waiting_for_reply)
-    await call.message.answer(f"Введите текст сообщения для пользователя {target_id}:")
+    await call.message.answer(f"Напиши сообщение для пользователя {target_id}:")
     await call.answer()
 
 @dp.message(AdminChat.waiting_for_reply)
@@ -119,8 +142,8 @@ async def send_reply(m: types.Message, state: FSMContext):
     data = await state.get_data(); target_id = data.get("reply_to")
     try:
         await bot.send_message(target_id, f"✉️ <b>Сообщение от администрации:</b>\n\n{m.text}", parse_mode="HTML")
-        await m.answer("✅ Сообщение отправлено!")
-    except: await m.answer("❌ Ошибка отправки.")
+        await m.answer("Отправлено!")
+    except: await m.answer("Ошибка.")
     await state.clear()
 
 # --- РЕГИСТРАЦИЯ ---
@@ -142,8 +165,9 @@ async def p_user(m: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="Написать 💬", callback_data=f"chat_with_{m.from_user.id}")]
     ])
     await bot.send_message(ADMIN_ID, f"<b>АНКЕТА</b>\nЮЗ: {m.text}\nID: {m.from_user.id}\nРОЛЬ: {data['role']}", reply_markup=kb, parse_mode="HTML")
-    await m.answer("Заявка отправлена!"); await state.clear()
+    await m.answer("Заявка ушла. Жди решения!"); await state.clear()
 
+# --- ЗАПУСК ---
 async def main():
     init_db()
     Thread(target=run, daemon=True).start()
