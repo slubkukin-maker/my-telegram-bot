@@ -31,7 +31,6 @@ DB_PATH = "database.db"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- STATES ---
 class RegForm(StatesGroup):
     role = State()
     username = State()
@@ -69,83 +68,85 @@ def get_uid_by_role(role_name):
     res = cursor.fetchone(); conn.close()
     return res[0] if res else None
 
-# --- НИЖНЯЯ КЛАВИАТУРА (REPLY) ---
+# --- КЛАВИАТУРА ---
 def get_main_reply_kb(uid):
     buttons = []
-    # Если не в базе - кнопка вступления первой
     if not is_user_approved(uid):
         buttons.append([KeyboardButton(text="📝 Вступить")])
-    
-    # Основные функции
     buttons.append([KeyboardButton(text="🚨 Подать жалобу"), KeyboardButton(text="📩 Оставить отзыв")])
-    
-    # Если в базе - кнопка апелляции
     if is_user_approved(uid):
         buttons.append([KeyboardButton(text="🛡 Апелляция")])
-        
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
-# --- ОБРАБОТКА КОМАНД И КНОПОК ---
+# --- ЛОГИКА СОЗЫВА ---
+async def global_call(new_user_role):
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    cursor.execute("SELECT user_id, name FROM all_users"); rows = cursor.fetchall(); conn.close()
+    
+    # Считаем реальных людей в чате через API
+    try:
+        total_in_chat = await bot.get_chat_member_count(CHAT_ID)
+        total_humans = total_in_chat - 1 # Вычитаем самого бота
+    except:
+        total_humans = len(rows)
+
+    mentions = [f"<a href='tg://user?id={r[0]}'>\u2063</a>" for r in rows] # Скрытые теги, чтобы не спамить именами
+    called_count = len(mentions)
+    
+    text = (f"📣 <b>СОЗЫВ: новый участник</b>\n"
+            f"Роль: <b>{new_user_role}</b>\n\n"
+            f"👥 Созвано: <b>{called_count}/{total_humans}</b>")
+    
+    # Отправляем по 5 тегов в сообщении, чтобы не словить лимит
+    for i in range(0, len(mentions), 5):
+        chunk = "".join(mentions[i:i+5])
+        await bot.send_message(CHAT_ID, f"{text}{chunk}", parse_mode="HTML")
+
+# --- ОБРАБОТЧИКИ ---
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
-    await m.answer("Панель управления активирована. Используйте кнопки внизу:", 
-                   reply_markup=get_main_reply_kb(m.from_user.id))
+    await m.answer("Панель управления активирована.", reply_markup=get_main_reply_kb(m.from_user.id))
 
-# Логика для кнопки "Вступить"
 @dp.message(F.text == "📝 Вступить")
 async def btn_reg(m: types.Message, state: FSMContext):
-    if is_user_approved(m.from_user.id):
-        await m.answer("Вы уже находитесь в базе!")
-        return
-    await m.answer("Укажите вашу роль:")
-    await state.set_state(RegForm.role)
+    if is_user_approved(m.from_user.id): return
+    await m.answer("Укажите вашу роль:"); await state.set_state(RegForm.role)
 
-# Логика для кнопки "Жалоба"
 @dp.message(F.text == "🚨 Подать жалобу")
 async def btn_complaint(m: types.Message, state: FSMContext):
-    await m.answer("Назовите ВАШУ роль в системе:")
-    await state.set_state(ComplaintForm.my_role)
+    await m.answer("Назовите ВАШУ роль в системе:"); await state.set_state(ComplaintForm.my_role)
 
-# Логика для кнопки "Отзыв"
 @dp.message(F.text == "📩 Оставить отзыв")
 async def btn_feedback(m: types.Message, state: FSMContext):
-    await m.answer("Напишите ваш анонимный отзыв (админ его получит без подписи вашего имени):")
-    await state.set_state(FeedbackForm.text)
+    await m.answer("Напишите ваш анонимный отзыв:"); await state.set_state(FeedbackForm.text)
 
-# Логика для кнопки "Апелляция"
 @dp.message(F.text == "🛡 Апелляция")
 async def btn_appeal(m: types.Message, state: FSMContext):
-    if not is_user_approved(m.from_user.id):
-        await m.answer("Апелляция доступна только участникам системы.")
-        return
-    await m.answer("Опишите вашу ситуацию для пересмотра нарушений:")
-    await state.set_state(AppealForm.text)
+    if not is_user_approved(m.from_user.id): return
+    await m.answer("Опишите причину апелляции:"); await state.set_state(AppealForm.text)
 
-# --- АДМИН КОМАНДЫ (БЕЗ ИЗМЕНЕНИЙ) ---
+# --- АДМИН КОМАНДЫ ---
 
 @dp.message(Command("list"))
 async def cmd_list(m: types.Message):
     if m.from_user.id != ADMIN_ID: return
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("SELECT user_id, role, violations FROM approved_users"); rows = cursor.fetchall(); conn.close()
-    if not rows:
-        await m.answer("База участников пуста."); return
-    text = "📂 <b>БАЗА ДАННЫХ:</b>\n\n"
-    for r in rows:
-        text += f"ID: <code>{r[0]}</code> | <b>{r[1]}</b> | Варны: {r[2]}/3\n"
-    await m.answer(text, parse_mode="HTML")
+    if not rows: await m.answer("База пуста."); return
+    res = "📂 <b>БАЗА:</b>\n" + "\n".join([f"<code>{r[0]}</code> | {r[1]} | {r[2]}/3" for r in rows])
+    await m.answer(res, parse_mode="HTML")
 
 @dp.message(Command("add"))
 async def cmd_add(m: types.Message):
     if m.from_user.id != ADMIN_ID: return
     try:
-        parts = m.text.split(maxsplit=2)
-        uid, role = int(parts[1]), parts[2]
+        p = m.text.split(maxsplit=2)
+        uid, role = int(p[1]), p[2]
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
         conn.commit(); conn.close()
-        await m.answer(f"✅ Готово. {uid} теперь {role}", reply_markup=get_main_reply_kb(uid))
+        await m.answer(f"✅ Добавлен: {uid}")
     except: await m.answer("Формат: `/add ID РОЛЬ`", parse_mode="Markdown")
 
 @dp.message(Command("del"))
@@ -156,10 +157,10 @@ async def cmd_delete(m: types.Message):
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (tid,))
         conn.commit(); conn.close()
-        await m.answer(f"✅ {tid} удален из базы.")
+        await m.answer(f"✅ {tid} удален.")
     except: await m.answer("Формат: `/del ID`", parse_mode="Markdown")
 
-# --- ЛОГИКА АНКЕТ И ЖАЛОБ (ОСТАЛЬНОЕ) ---
+# --- АНКЕТЫ И ПРИНЯТИЕ ---
 
 @dp.message(RegForm.role)
 async def p_role(m: types.Message, state: FSMContext):
@@ -168,53 +169,15 @@ async def p_role(m: types.Message, state: FSMContext):
 @dp.message(RegForm.username)
 async def p_user(m: types.Message, state: FSMContext):
     data = await state.get_data()
+    name = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
+    # Сразу сохраняем в общую базу всех (для созыва)
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (m.from_user.id, name))
+    conn.commit(); conn.close()
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Принять ✅", callback_data=f"adm_ok_{m.from_user.id}"), InlineKeyboardButton(text="Отклонить ❌", callback_data=f"adm_no_{m.from_user.id}")]])
     await bot.send_message(ADMIN_ID, f"<b>АНКЕТА</b>\nЮЗ: {m.text}\nID: {m.from_user.id}\nРОЛЬ: {data['role']}", reply_markup=kb, parse_mode="HTML")
-    await m.answer("Заявка отправлена. Ожидайте решения."); await state.clear()
-
-@dp.message(ComplaintForm.my_role)
-async def comp_my_role(m: types.Message, state: FSMContext):
-    if not get_uid_by_role(m.text):
-        await m.answer("Такой роли нет. Проверьте правильность:"); return
-    await state.update_data(my_role=m.text); await m.answer("Суть жалобы:"); await state.set_state(ComplaintForm.text)
-
-@dp.message(ComplaintForm.text)
-async def comp_text(m: types.Message, state: FSMContext):
-    await state.update_data(text=m.text)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Без файлов ➡️", callback_data="skip_file")]])
-    await m.answer("Прикрепите доказательства или нажмите кнопку:", reply_markup=kb); await state.set_state(ComplaintForm.evidence)
-
-@dp.callback_query(F.data == "skip_file", ComplaintForm.evidence)
-@dp.message(ComplaintForm.evidence)
-async def comp_target_role(msg: types.Message | CallbackQuery, state: FSMContext):
-    if isinstance(msg, types.Message):
-        fid = msg.photo[-1].file_id if msg.photo else (msg.document.file_id if msg.document else None)
-        await state.update_data(file=fid); await msg.answer("Укажите роль НАРУШИТЕЛЯ:")
-    else: await msg.message.answer("Укажите роль НАРУШИТЕЛЯ:"); await msg.answer()
-    await state.set_state(ComplaintForm.target_role)
-
-@dp.message(ComplaintForm.target_role)
-async def comp_final(m: types.Message, state: FSMContext):
-    target_uid = get_uid_by_role(m.text)
-    if not target_uid: await m.answer("Роль нарушителя не найдена:"); return
-    data = await state.get_data()
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Одобрить ✅", callback_data=f"warn_ok_{target_uid}"), InlineKeyboardButton(text="Отклонить ❌", callback_data=f"warn_no")]])
-    cap = f"🚨 <b>ЖАЛОБА</b>\nОт: {data['my_role']}\nНа: {m.text}\nСуть: {data['text']}"
-    if data.get('file'): await bot.send_photo(ADMIN_ID, data['file'], caption=cap, reply_markup=kb, parse_mode="HTML")
-    else: await bot.send_message(ADMIN_ID, cap, reply_markup=kb, parse_mode="HTML")
-    await m.answer("Жалоба отправлена."); await state.clear()
-
-@dp.message(FeedbackForm.text)
-async def process_fb(m: types.Message, state: FSMContext):
-    await bot.send_message(ADMIN_ID, f"📥 <b>ОТЗЫВ</b>\n\n{m.text}", parse_mode="HTML")
-    await m.answer("Спасибо! Ваш отзыв принят."); await state.clear()
-
-@dp.message(AppealForm.text)
-async def process_appeal(m: types.Message, state: FSMContext):
-    await bot.send_message(ADMIN_ID, f"🛡 <b>АПЕЛЛЯЦИЯ</b>\nID: {m.from_user.id}\nТекст: {m.text}", parse_mode="HTML")
-    await m.answer("Апелляция отправлена."); await state.clear()
-
-# --- КНОПКИ ПРИНЯТИЯ И ВАРНОВ ---
+    await m.answer("Заявка отправлена."); await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_"))
 async def admin_reg_confirm(call: CallbackQuery):
@@ -224,29 +187,67 @@ async def admin_reg_confirm(call: CallbackQuery):
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
         conn.commit(); conn.close()
-        await bot.send_message(uid, f"Вы приняты! Роль: {role}\nВступайте: {CHAT_LINK}", reply_markup=get_main_reply_kb(uid))
+        await bot.send_message(uid, f"Принято! Роль: {role}\n{CHAT_LINK}", reply_markup=get_main_reply_kb(uid))
         await call.message.edit_text(call.message.text + "\n\n✅ ОДОБРЕНО")
+        # ВЫЗОВ СОЗЫВА
+        await global_call(role)
     else:
-        await bot.send_message(uid, "Заявка отклонена.")
-        await call.message.edit_text(call.message.text + "\n\n❌ ОТКЛОНЕНО")
+        await bot.send_message(uid, "Отклонено."); await call.message.edit_text(call.message.text + "\n\n❌ ОТКЛОНЕНО")
 
+# --- СИСТЕМА ЖАЛОБ И ОТЗЫВОВ ---
+@dp.message(ComplaintForm.my_role)
+async def comp_my_role(m: types.Message, state: FSMContext):
+    if not get_uid_by_role(m.text): await m.answer("Нет такой роли!"); return
+    await state.update_data(my_role=m.text); await m.answer("Суть:"); await state.set_state(ComplaintForm.text)
+
+@dp.message(ComplaintForm.text)
+async def comp_text(m: types.Message, state: FSMContext):
+    await state.update_data(text=m.text); await m.answer("Файлы?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="skip_file")]])); await state.set_state(ComplaintForm.evidence)
+
+@dp.callback_query(F.data == "skip_file", ComplaintForm.evidence)
+@dp.message(ComplaintForm.evidence)
+async def comp_target_role(msg: types.Message | CallbackQuery, state: FSMContext):
+    if isinstance(msg, types.Message):
+        fid = msg.photo[-1].file_id if msg.photo else (msg.document.file_id if msg.document else None)
+        await state.update_data(file=fid); await msg.answer("Роль нарушителя:")
+    else: await msg.message.answer("Роль нарушителя:"); await msg.answer()
+    await state.set_state(ComplaintForm.target_role)
+
+@dp.message(ComplaintForm.target_role)
+async def comp_final(m: types.Message, state: FSMContext):
+    target_uid = get_uid_by_role(m.text)
+    if not target_uid: await m.answer("Не найден!"); return
+    data = await state.get_data()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Варн ✅", callback_data=f"warn_ok_{target_uid}"), InlineKeyboardButton(text="Отмена ❌", callback_data="warn_no")]])
+    cap = f"🚨 <b>ЖАЛОБА</b>\nОт: {data['my_role']}\nНа: {m.text}\nСуть: {data['text']}"
+    if data.get('file'): await bot.send_photo(ADMIN_ID, data['file'], caption=cap, reply_markup=kb, parse_mode="HTML")
+    else: await bot.send_message(ADMIN_ID, cap, reply_markup=kb, parse_mode="HTML")
+    await m.answer("Жалоба ушла."); await state.clear()
+
+@dp.message(FeedbackForm.text)
+async def process_fb(m: types.Message, state: FSMContext):
+    await bot.send_message(ADMIN_ID, f"📥 <b>ОТЗЫВ</b>\n\n{m.text}", parse_mode="HTML"); await m.answer("Принято!"); await state.clear()
+
+@dp.message(AppealForm.text)
+async def process_appeal(m: types.Message, state: FSMContext):
+    await bot.send_message(ADMIN_ID, f"🛡 <b>АПЕЛЛЯЦИЯ</b>\nID: {m.from_user.id}\nТекст: {m.text}", parse_mode="HTML"); await m.answer("Ушло."); await state.clear()
+
+# --- ВАРНЫ ---
 @dp.callback_query(F.data.startswith("warn_"))
 async def handle_warn(call: CallbackQuery):
-    if "no" in call.data: await call.message.edit_text(call.message.text + "\n\n❌ Отклонено"); return
-    target_uid = int(call.data.split("_")[2])
+    if "no" in call.data: await call.message.delete(); return
+    tuid = int(call.data.split("_")[2])
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("UPDATE approved_users SET violations = violations + 1 WHERE user_id = ?", (target_uid,))
-    cursor.execute("SELECT violations FROM approved_users WHERE user_id = ?", (target_uid,))
-    v_count = cursor.fetchone()[0]
-    if v_count >= 3:
-        try: await bot.ban_chat_member(CHAT_ID, target_uid)
+    cursor.execute("UPDATE approved_users SET violations = violations + 1 WHERE user_id = ?", (tuid,))
+    cursor.execute("SELECT violations FROM approved_users WHERE user_id = ?", (tuid,))
+    v = cursor.fetchone()[0]
+    if v >= 3:
+        try: await bot.ban_chat_member(CHAT_ID, tuid)
         except: pass
-        cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (target_uid,))
-        await bot.send_message(target_uid, "Бан за 3/3 нарушений.", reply_markup=get_main_reply_kb(target_uid))
-        await call.message.edit_text(call.message.text + "\n\n🔥 БАН")
+        cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (tuid,))
+        await bot.send_message(tuid, "Бан 3/3."); await call.message.edit_text("🔥 Игрок забанен")
     else:
-        await bot.send_message(target_uid, f"Предупреждение {v_count}/3.")
-        await call.message.edit_text(call.message.text + f"\n\n✅ Варн {v_count}/3")
+        await bot.send_message(tuid, f"Варн {v}/3."); await call.message.edit_text(f"✅ Выдан варн {v}/3")
     conn.commit(); conn.close()
 
 # --- ПЛАШКИ ---
@@ -256,16 +257,22 @@ async def auto_approve_logic(req: ChatJoinRequest):
     cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (req.from_user.id,))
     res = cursor.fetchone(); conn.close()
     if res:
-        await req.approve()
-        await asyncio.sleep(1)
+        await req.approve(); await asyncio.sleep(1)
         try: await bot.make_request("setChatMemberTag", {"chat_id": CHAT_ID, "user_id": req.from_user.id, "tag": res[0]})
         except: pass
 
+# --- ЗАПУСК ---
 async def main():
     init_db()
     Thread(target=run, daemon=True).start()
     await bot.delete_webhook(drop_pending_updates=True)
-    await bot.set_my_commands([BotCommand(command="start", description="Обновить меню"), BotCommand(command="list", description="База (админ)")])
+    # Настройка команд для меню
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Обновить меню"),
+        BotCommand(command="list", description="Список базы"),
+        BotCommand(command="add", description="Добавить (ID РОЛЬ)"),
+        BotCommand(command="del", description="Удалить (ID)")
+    ])
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_join_request"])
 
 if __name__ == "__main__":
