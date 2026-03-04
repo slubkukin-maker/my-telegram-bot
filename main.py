@@ -43,7 +43,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- КНОПКИ (ВСТУПИТЬ, ЖАЛОБА, АПЕЛЛЯЦИЯ, ОТЗЫВ) ---
 def main_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Вступить", callback_data="start_reg")],
@@ -52,24 +51,11 @@ def main_kb():
         [InlineKeyboardButton(text="⭐ Отзыв", callback_data="type_отзыв")]
     ])
 
-# --- ОБРАБОТКА КОМАНД ---
-
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     await m.answer("👋 Привет! Выбери нужный раздел:", reply_markup=main_kb())
 
-@dp.message(Command("check"))
-async def cmd_check(m: types.Message):
-    if m.from_user.id != ADMIN_ID: return
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM approved_users"); approved = [r[0] for r in cursor.fetchall()]
-    cursor.execute("SELECT user_id, name FROM all_users"); all_u = cursor.fetchall(); conn.close()
-    bad = [f"<code>{u[0]}</code> | {u[1]}" for u in all_u if u[0] not in approved]
-    if not bad: await m.answer("Все подтверждены! ✅")
-    else: await m.answer("<b>БЕЗ РОЛИ:</b>\n\n" + "\n".join(bad), parse_mode="HTML")
-
-# --- ЛОГИКА ЖАЛОБ / ОТЗЫВОВ ---
-
+# --- ЖАЛОБЫ / ОТЗЫВЫ ---
 @dp.callback_query(F.data.startswith("type_"))
 async def process_report_type(call: CallbackQuery, state: FSMContext):
     report_type = call.data.split("_")[1]
@@ -89,7 +75,6 @@ async def send_report_to_admin(m: types.Message, state: FSMContext):
     await state.clear()
 
 # --- АНКЕТА ---
-
 @dp.callback_query(F.data == "start_reg")
 async def start_reg(call: CallbackQuery, state: FSMContext):
     await call.message.answer("Твоя роль:"); await state.set_state(Form.role); await call.answer()
@@ -109,21 +94,33 @@ async def p_user(m: types.Message, state: FSMContext):
     await bot.send_message(ADMIN_ID, f"🆕 <b>АНКЕТА</b>\nНик: {m.text}\nID: {uid}\nРоль: {role}", reply_markup=kb, parse_mode="HTML")
     await m.answer("Анкета отправлена!"); await state.clear()
 
+# --- КНОПКИ АДМИНА (ИСПРАВЛЕНО) ---
 @dp.callback_query(F.data.startswith("adm_"))
 async def admin_btns(call: CallbackQuery, state: FSMContext):
-    action = call.data.split("_")[1]; target_uid = int(call.data.split("_")[2])
+    data_parts = call.data.split("_")
+    action = data_parts[1]
+    target_uid = int(data_parts[2])
+    
     if action == "ok":
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, 'Member')")
         conn.commit(); conn.close()
-        await bot.send_message(target_uid, f"Принято! ✨\n{CHAT_LINK}")
-        await call.message.edit_text(call.message.text + "\n\n✅ СТАТУС: ПРИНЯТ")
+        try:
+            await bot.send_message(target_uid, f"Принято! ✨\n{CHAT_LINK}")
+            await call.message.edit_text(call.message.text + "\n\n✅ СТАТУС: ПРИНЯТ")
+        except:
+            await call.message.edit_text(call.message.text + "\n\n✅ OK (Но юзер закрыл ЛС)")
+            
     elif action == "no":
-        await bot.send_message(target_uid, "Отклонено. ❌")
+        try:
+            await bot.send_message(target_uid, "Отклонено. ❌")
+        except: pass
         await call.message.edit_text(call.message.text + "\n\n❌ СТАТУС: ОТКЛОНЕН")
+        
     elif action == "msg":
         await call.message.answer(f"Пиши ответ для {target_uid}:")
         await state.update_data(target_to_msg=target_uid); await state.set_state(Form.admin_reply)
+    
     await call.answer()
 
 @dp.message(Form.admin_reply)
@@ -138,8 +135,6 @@ async def admin_reply_send(m: types.Message, state: FSMContext):
 async def main():
     init_db()
     Thread(target=run, daemon=True).start()
-    await bot.set_my_commands([BotCommand(command="start", description="Меню"), BotCommand(command="check", description="Проверка")])
-    # Очистка очереди и запуск
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
