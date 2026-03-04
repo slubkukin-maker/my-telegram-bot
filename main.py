@@ -2,6 +2,7 @@ import asyncio
 import sqlite3
 import logging
 import os
+import aiohttp
 from flask import Flask
 from threading import Thread
 from aiogram import Bot, Dispatcher, types, F
@@ -9,8 +10,8 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton, 
-                            InlineKeyboardButton, InlineKeyboardMarkup, 
-                            CallbackQuery, ChatJoinRequest)
+                           InlineKeyboardButton, InlineKeyboardMarkup, 
+                           CallbackQuery, ChatJoinRequest)
 
 # --- SERVER ---
 app = Flask('')
@@ -21,7 +22,7 @@ def run():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- КОНФИГ (ТОКЕН ОБНОВЛЕН) ---
+# --- КОНФИГ ---
 TOKEN = "8344752199:AAGzVYnAgUFW72XG1lnR26QrZPFFj12WbiE"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
@@ -40,30 +41,37 @@ class AdminChat(StatesGroup):
 
 # --- БАЗА ДАННЫХ ---
 def init_db():
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS approved_users (user_id INTEGER PRIMARY KEY, role TEXT)")
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
 
 def get_all_users():
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM approved_users")
-    users = [row[0] for row in cursor.fetchall()]; conn.close()
+    users = [row[0] for row in cursor.fetchall()]
+    conn.close()
     return users
 
-# --- ИСПРАВЛЕННАЯ ФУНКЦИЯ ПЛАШЕК ---
+# --- ИСПРАВЛЕННАЯ ФУНКЦИЯ ПЛАШЕК (ЧЕРЕЗ ПРЯМОЙ API ЗАПРОС) ---
 async def set_member_tag(uid, tag_text):
     try:
-        # Убеждаемся, что ID - это числа
-        c_id = int(CHAT_ID)
-        u_id = int(uid)
-        
-        # Делаем запрос к API
-        result = await bot.make_request("setChatMemberTag", {
-            "chat_id": c_id,
-            "user_id": u_id,
+        url = f"https://api.telegram.org/bot{TOKEN}/setChatMemberTag"
+        payload = {
+            "chat_id": CHAT_ID,
+            "user_id": int(uid),
             "tag": str(tag_text)
-        })
-        return True, result
+        }
+        # Делаем прямой запрос, чтобы обойти ограничения текущей версии aiogram
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                result = await response.json()
+                if result.get("ok"):
+                    return True, result
+                else:
+                    return False, result.get("description", "Unknown error")
     except Exception as e:
         logging.error(f"Ошибка Member Tag: {e}")
         return False, str(e)
@@ -106,14 +114,16 @@ async def approve(call: CallbackQuery):
         role = call.message.text.split("РОЛЬ: ")[1].split("\n")[0].strip()
 
     # Сохраняем
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
     
     # 1. Ждем 2 секунды, чтобы Telegram "осознал", что юзер вступил
     await asyncio.sleep(2)
     
-    # 2. Пытаемся поставить плашку
+    # 2. Пытаемся поставить плашку (Тег участника)
     success, error_msg = await set_member_tag(uid, role)
     
     status_text = f"\n✅ ПРИНЯТ. ПЛАШКА '{role}' ВЫДАНА." if success else f"\n⚠️ ПРИНЯТ, НО ПЛАШКА НЕ ВЫШЛА: {error_msg}"
@@ -142,7 +152,8 @@ async def start_reply(call: CallbackQuery, state: FSMContext):
 @dp.message(AdminChat.waiting_for_reply)
 async def send_reply(m: types.Message, state: FSMContext):
     if m.from_user.id != ADMIN_ID: return
-    data = await state.get_data(); target_id = data.get("reply_to")
+    data = await state.get_data()
+    target_id = data.get("reply_to")
     try:
         await bot.send_message(target_id, f"✉️ <b>Сообщение от администрации:</b>\n\n{m.text}", parse_mode="HTML")
         await m.answer("Отправлено!")
@@ -152,12 +163,14 @@ async def send_reply(m: types.Message, state: FSMContext):
 # --- РЕГИСТРАЦИЯ ---
 @dp.message(F.text == "📝 Вступить")
 async def start_reg(m: types.Message, state: FSMContext):
-    await m.answer("Напиши свою роль:"); await state.set_state(RegForm.role)
+    await m.answer("Напиши свою роль:")
+    await state.set_state(RegForm.role)
 
 @dp.message(RegForm.role)
 async def p_role(m: types.Message, state: FSMContext):
     await state.update_data(role=m.text)
-    await m.answer("Напиши свой @username:"); await state.set_state(RegForm.username)
+    await m.answer("Напиши свой @username:")
+    await state.set_state(RegForm.username)
 
 @dp.message(RegForm.username)
 async def p_user(m: types.Message, state: FSMContext):
@@ -168,7 +181,8 @@ async def p_user(m: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="Написать 💬", callback_data=f"chat_with_{m.from_user.id}")]
     ])
     await bot.send_message(ADMIN_ID, f"<b>АНКЕТА</b>\nЮЗ: {m.text}\nID: {m.from_user.id}\nРОЛЬ: {data['role']}", reply_markup=kb, parse_mode="HTML")
-    await m.answer("Заявка ушла!"); await state.clear()
+    await m.answer("Заявка ушла!")
+    await state.clear()
 
 async def main():
     init_db()
@@ -177,4 +191,5 @@ async def main():
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_join_request"])
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO); asyncio.run(main())
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(main())
