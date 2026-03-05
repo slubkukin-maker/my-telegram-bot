@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated, ChatJoinRequest
 
 # --- 24/7 SERVER ---
 app = Flask('')
@@ -19,7 +19,7 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# --- CONFIG (Настройки должны быть вверху) ---
+# --- CONFIG ---
 TOKEN = "8344752199:AAGDB6PqgYxnGVK-o-PjTxZf71gec_mZ_Pw"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
@@ -48,6 +48,21 @@ def init_db():
 async def cmd_start(m: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Вступить", callback_data="start_reg")]])
     await m.answer(f"ID: <code>{m.from_user.id}</code>", reply_markup=kb, parse_mode="HTML")
+
+@dp.message(Command("add"))
+async def cmd_add(m: types.Message):
+    if m.from_user.id != ADMIN_ID: return
+    try:
+        args = m.text.split(maxsplit=2)
+        target_id = int(args[1])
+        role = args[2] if len(args) > 2 else "Member"
+        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_id, role))
+        cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_id, role))
+        conn.commit(); conn.close()
+        await m.answer(f"Пользователь <code>{target_id}</code> добавлен с ролью {role}")
+    except:
+        await m.answer("Формат: /add ID Роль")
 
 @dp.message(Command("del"))
 async def cmd_delete(m: types.Message):
@@ -81,9 +96,9 @@ async def cmd_all(m: types.Message):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("SELECT user_id, name FROM all_users"); rows = cursor.fetchall(); conn.close()
     if not rows: return
-    mentions = [f"<a href='tg://user?id={r[0]}'>{r[1]}</a>" for r in rows]
-    for i in range(0, len(mentions), 5):
-        await m.answer(f"SBOR:\n{', '.join(mentions[i:i+5])}", parse_mode="HTML")
+    mentions = [f"<a href='tg://user?id={r[0]}'>\u2060</a>" for r in rows] # Скрытое упоминание
+    for i in range(0, len(mentions), 100): # Telegram лимит 100 упоминаний на сообщение
+        await m.answer(f"Общий сбор! 📢\n{''.join(mentions[i:i+100])}", parse_mode="HTML")
 
 # --- АНКЕТА И КНОПКИ ---
 
@@ -135,16 +150,51 @@ async def admin_reply_send(m: types.Message, state: FSMContext):
     except: await m.answer("Ошибка.")
     await state.clear()
 
-# --- АВТО-УДАЛЕНИЕ ПРИ ВЫХОДЕ ---
+# --- АВТОМАТИЧЕСКОЕ ОДОБРЕНИЕ ЗАЯВКИ ---
+@dp.chat_join_request()
+async def auto_approve(request: ChatJoinRequest):
+    user_id = request.from_user.id
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM approved_users WHERE user_id = ?", (user_id,))
+    is_approved = cursor.fetchone()
+    conn.close()
+
+    if is_approved:
+        await request.approve()
+    else:
+        await bot.send_message(user_id, "Сначала пройдите регистрацию: /start")
+
+# --- АВТО-УДАЛЕНИЕ ПРИ ВЫХОДЕ И ПРИВЕТСТВИЕ ПРИ ВХОДЕ ---
 @dp.chat_member()
 async def on_chat_member_update(update: ChatMemberUpdated):
     if update.chat.id == CHAT_ID:
+        # Если пользователь вышел
         if update.new_chat_member.status in ["left", "kicked"]:
             uid = update.from_user.id
             conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
             cursor.execute("DELETE FROM all_users WHERE user_id = ?", (uid,))
             cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
             conn.commit(); conn.close()
+        
+        # Если пользователь вступил
+        elif update.new_chat_member.status == "member" and update.old_chat_member.status in ["left", "kicked", "restricted"]:
+            uid = update.new_chat_member.user.id
+            conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+            cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
+            role_row = cursor.fetchone()
+            role = role_row[0] if role_row else "Новый участник"
+            
+            # Собираем всех для скрытого тега
+            cursor.execute("SELECT user_id FROM all_users")
+            rows = cursor.fetchall(); conn.close()
+            mentions = "".join([f"<a href='tg://user?id={r[0]}'>\u2060</a>" for r in rows])
+            
+            welcome_text = (
+                f"<b>Harmony Bot: Общий сбор!</b>\n\n"
+                f"Новый участник: <b>{role}</b>\n"
+                f"✨{mentions}" # Эмодзи, в котором «спрятаны» все теги
+            )
+            await bot.send_message(CHAT_ID, welcome_text, parse_mode="HTML")
 
 # Захват сообщений в группе
 @dp.message(F.chat.id == CHAT_ID)
@@ -161,10 +211,11 @@ async def main():
         BotCommand(command="start", description="Меню"),
         BotCommand(command="all", description="Сбор"),
         BotCommand(command="list", description="База"),
+        BotCommand(command="add", description="Добавить по ID"),
         BotCommand(command="del", description="Удалить по ID")
     ])
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
 
 if __name__ == "__main__":
     asyncio.run(main())
