@@ -19,7 +19,7 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# --- CONFIG ---
+# --- CONFIG (Настройки должны быть вверху) ---
 TOKEN = "8344752199:AAFwouRQZYV2ztyDwC44qCu8uTxq2lgWtoc"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
@@ -109,13 +109,9 @@ async def p_user(m: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("adm_"))
 async def admin_btns(call: CallbackQuery, state: FSMContext):
-    data_parts = call.data.split("_")
-    action = data_parts[1]; target_uid = int(data_parts[2])
+    action = call.data.split("_")[1]; target_uid = int(call.data.split("_")[2])
     if action == "ok":
-        role = "Member"
-        if "ROLE: " in call.message.text:
-            role = call.message.text.split("ROLE: ")[1].split("\n")[0]
-        
+        role = call.message.text.split("ROLE: ")[1] if "ROLE: " in call.message.text else "Member"
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
         cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_uid, role))
@@ -139,41 +135,18 @@ async def admin_reply_send(m: types.Message, state: FSMContext):
     except: await m.answer("Ошибка.")
     await state.clear()
 
-# --- ОБРАБОТКА ВХОДА/ВЫХОДА И СОЗЫВ ---
+# --- АВТО-УДАЛЕНИЕ ПРИ ВЫХОДЕ ---
 @dp.chat_member()
 async def on_chat_member_update(update: ChatMemberUpdated):
-    if update.chat.id != CHAT_ID: return
-    
-    uid = update.new_chat_member.user.id
-    
-    # Если вышел/удален
-    if update.new_chat_member.status in ["left", "kicked"]:
-        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-        cursor.execute("DELETE FROM all_users WHERE user_id = ?", (uid,))
-        cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
-        conn.commit(); conn.close()
-    
-    # Если вступил (новый участник)
-    elif update.new_chat_member.status == "member" and update.old_chat_member.status in ["left", "kicked", "none"]:
-        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-        cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
-        res = cursor.fetchone()
-        role = res[0] if res else "Участник"
-        
-        # Получаем всех для скрытой отметки
-        cursor.execute("SELECT user_id FROM all_users")
-        all_ids = [r[0] for r in cursor.fetchall()]
-        conn.close()
-        
-        # Формируем скрытую отметку (невидимые ссылки)
-        hidden_mentions = "".join([f"<a href='tg://user?id={user_id}'>\u2060</a>" for user_id in all_ids])
-        
-        await bot.send_message(
-            CHAT_ID, 
-            f"Общий созыв! Вступил новый человек. Роль: {role}{hidden_mentions}", 
-            parse_mode="HTML"
-        )
+    if update.chat.id == CHAT_ID:
+        if update.new_chat_member.status in ["left", "kicked"]:
+            uid = update.from_user.id
+            conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+            cursor.execute("DELETE FROM all_users WHERE user_id = ?", (uid,))
+            cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
+            conn.commit(); conn.close()
 
+# Захват сообщений в группе
 @dp.message(F.chat.id == CHAT_ID)
 async def collect_msg(m: types.Message):
     if m.from_user.is_bot: return
