@@ -9,6 +9,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated, ChatJoinRequest
 
+logging.basicConfig(level=logging.INFO)
+
 app = Flask('')
 @app.route('/')
 def home(): return "Bot is Online"
@@ -18,7 +20,7 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-TOKEN = "8344752199:AAGDB6PqgYxnGVK-o-PjTxZf71gec_mZ_Pw"
+TOKEN = "8344752199:AAGF0ICQhMrZCc30O0UM5QYaIMpQTnJcjXw"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -30,7 +32,6 @@ dp = Dispatcher()
 class Form(StatesGroup):
     role = State()
     user = State()
-    admin_reply = State()
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -54,10 +55,10 @@ async def cmd_add(m: types.Message):
         role = args[2] if len(args) > 2 else "Member"
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_id, role))
-        cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_id, role))
+        cursor.execute("INSERT OR IGNORE INTO all_users (user_id, name) VALUES (?, ?)", (target_id, "Unknown"))
         conn.commit(); conn.close()
         await m.answer(f"OK: {target_id} | {role}")
-    except: await m.answer("Формат: /add ID Роль")
+    except Exception: await m.answer("Формат: /add ID Роль")
 
 @dp.message(Command("del"))
 async def cmd_delete(m: types.Message):
@@ -69,7 +70,7 @@ async def cmd_delete(m: types.Message):
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (target_id,))
         conn.commit(); conn.close()
         await m.answer(f"Удален: {target_id}")
-    except: await m.answer("Формат: /del ID")
+    except Exception: await m.answer("Формат: /del ID")
 
 @dp.message(Command("list"))
 async def cmd_list(m: types.Message):
@@ -104,23 +105,26 @@ async def p_role(m: types.Message, state: FSMContext):
 @dp.message(Form.user)
 async def p_user(m: types.Message, state: FSMContext):
     data = await state.get_data(); role = data.get('role'); uid = m.from_user.id
+    name = m.text
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Принять", callback_data=f"adm_ok_{uid}"),
          InlineKeyboardButton(text="Отклонить", callback_data=f"adm_no_{uid}")]
     ])
-    await bot.send_message(ADMIN_ID, f"ANKETA\nUSER: {m.text}\nID: {uid}\nROLE: {role}", reply_markup=kb)
+    await bot.send_message(ADMIN_ID, f"ANKETA\nUSER: {name}\nID: {uid}\nROLE: {role}", reply_markup=kb)
     await m.answer("Заявка отправлена."); await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_"))
 async def admin_btns(call: CallbackQuery, state: FSMContext):
     action = call.data.split("_")[1]; target_uid = int(call.data.split("_")[2])
     if action == "ok":
-        role = "Member"
-        if "ROLE: " in call.message.text:
-            role = call.message.text.split("ROLE: ")[1].split("\n")[0]
+        role, name = "Member", "Unknown"
+        lines = call.message.text.split("\n")
+        for line in lines:
+            if "ROLE: " in line: role = line.split("ROLE: ")[1]
+            if "USER: " in line: name = line.split("USER: ")[1]
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
-        cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_uid, role))
+        cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_uid, name))
         conn.commit(); conn.close()
         await bot.send_message(target_uid, f"Принято! Роль: {role}\n{CHAT_LINK}")
         await call.message.edit_text(call.message.text + "\nSTATUS: OK")
@@ -141,64 +145,29 @@ async def auto_approve(request: ChatJoinRequest):
 async def on_chat_member_update(update: ChatMemberUpdated):
     if update.chat.id == CHAT_ID:
         if update.new_chat_member.status in ["left", "kicked"]:
-            uid = update.from_user.id
+            uid = update.new_chat_member.user.id
             conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
             cursor.execute("DELETE FROM all_users WHERE user_id = ?", (uid,))
             cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
             conn.commit(); conn.close()
-
         elif update.new_chat_member.status == "member" and update.old_chat_member.status != "member":
-
             uid = update.new_chat_member.user.id
-
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-
+            conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
             cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
-            res = cursor.fetchone()
-
-            role = res[0] if res else "Member"
-
+            res = cursor.fetchone(); role = res[0] if res else "Member"
             try:
-
                 await bot.promote_chat_member(
-                    chat_id=CHAT_ID,
-                    user_id=uid,
-                    can_manage_chat=False,
-                    can_post_messages=False,
-                    can_edit_messages=False,
-                    can_delete_messages=False,
-                    can_invite_users=False,
-                    can_restrict_members=False,
-                    can_pin_messages=False,
-                    can_promote_members=False,
-                    can_manage_video_chats=False,
-                    can_anonymous=False,
-                    can_manage_topics=False
+                    chat_id=CHAT_ID, user_id=uid, can_manage_chat=True,
+                    can_post_messages=False, can_edit_messages=False, can_delete_messages=False,
+                    can_invite_users=False, can_restrict_members=False, can_pin_messages=False,
+                    can_promote_members=False, can_manage_video_chats=False, is_anonymous=False, can_manage_topics=False
                 )
-
                 await asyncio.sleep(1)
-
-                await bot.set_chat_administrator_custom_title(
-                    chat_id=CHAT_ID,
-                    user_id=uid,
-                    custom_title=role
-                )
-
-            except:
-                pass
-
-            cursor.execute("SELECT user_id FROM all_users")
-            rows = cursor.fetchall()
-            conn.close()
-
+                await bot.set_chat_administrator_custom_title(chat_id=CHAT_ID, user_id=uid, custom_title=role)
+            except Exception: pass
+            cursor.execute("SELECT user_id FROM all_users"); rows = cursor.fetchall(); conn.close()
             mentions = "".join([f"<a href='tg://user?id={r[0]}'>\u2060</a>" for r in rows])
-
-            await bot.send_message(
-                CHAT_ID,
-                f"<b>Harmony Bot: Общий сбор!</b>\nНовый участник: <b>{role}</b>\n✨{mentions}",
-                parse_mode="HTML"
-            )
+            await bot.send_message(CHAT_ID, f"<b>Harmony Bot: Общий сбор!</b>\nНовый участник: <b>{role}</b>\n✨{mentions}", parse_mode="HTML")
 
 @dp.message(F.chat.id == CHAT_ID)
 async def collect_msg(m: types.Message):
