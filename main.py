@@ -20,7 +20,7 @@ def keep_alive():
     t.start()
 
 # --- CONFIG ---
-TOKEN = "8344752199:AAGDB6PqgYxnGVK-o-PjTxZf71gec_mZ_Pw"
+TOKEN = "8344752199:AAGnjWgX3rcrvtUAC9SNSLD6lJFRsRdX8yo"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
