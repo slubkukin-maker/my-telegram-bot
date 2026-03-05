@@ -22,8 +22,8 @@ def run():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- КОНФИГ ---
-TOKEN = "8344752199:AAGzVYnAgUFW72XG1lnR26QrZPFFj12WbiE"
+# --- КОНФИГ (ТОКЕН ОБНОВЛЕН) ---
+TOKEN = "8344752199:AAFt6L6id83M-eQZMkXKXRLhle2oP9Um98A"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
