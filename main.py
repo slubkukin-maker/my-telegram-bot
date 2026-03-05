@@ -9,6 +9,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated, ChatJoinRequest
 
+# Настройка логирования для отслеживания ошибок API
+logging.basicConfig(level=logging.INFO)
+
 app = Flask('')
 @app.route('/')
 def home(): return "Bot is Online"
@@ -152,15 +155,18 @@ async def on_chat_member_update(update: ChatMemberUpdated):
             cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
             res = cursor.fetchone(); role = res[0] if res else "Member"
             try:
+                # Назначаем минимальные админ-права для возможности отображения кастомного титула
                 await bot.promote_chat_member(
                     chat_id=CHAT_ID, user_id=uid,
                     can_manage_chat=False, can_post_messages=False, can_edit_messages=False,
-                    can_delete_messages=False, can_invite_users=False, can_restrict_members=False,
+                    can_delete_messages=False, can_invite_users=True, can_restrict_members=False,
                     can_pin_messages=False, can_promote_members=False, can_manage_video_chats=False,
                     can_anonymous=False, can_manage_topics=False
                 )
                 await bot.set_chat_administrator_custom_title(chat_id=CHAT_ID, user_id=uid, custom_title=role)
-            except: pass
+            except Exception as e:
+                logging.error(f"Failed to promote user {uid}: {e}")
+            
             cursor.execute("SELECT user_id FROM all_users")
             rows = cursor.fetchall(); conn.close()
             mentions = "".join([f"<a href='tg://user?id={r[0]}'>\u2060</a>" for r in rows])
@@ -187,4 +193,9 @@ async def main():
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    async def run_bot():
+        try:
+            await main()
+        except (KeyboardInterrupt, SystemExit):
+            pass
+    asyncio.run(run_bot())
