@@ -9,9 +9,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated, ChatJoinRequest
 
-# Настройка логирования для отслеживания ошибок API
-logging.basicConfig(level=logging.INFO)
-
 app = Flask('')
 @app.route('/')
 def home(): return "Bot is Online"
@@ -21,7 +18,7 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-TOKEN = "8344752199:AAGnjWgX3rcrvtUAC9SNSLD6lJFRsRdX8yo"
+TOKEN = "8344752199:AAGDB6PqgYxnGVK-o-PjTxZf71gec_mZ_Pw"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -42,6 +39,28 @@ def init_db():
     cursor.execute("CREATE TABLE IF NOT EXISTS all_users (user_id INTEGER PRIMARY KEY, name TEXT)")
     conn.commit()
     conn.close()
+
+
+# -------- ДОБАВЛЕНА ФУНКЦИЯ УСТАНОВКИ ТЕГА --------
+async def set_member_tag(user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (user_id,))
+    res = cursor.fetchone()
+    conn.close()
+
+    role = res[0] if res else "Member"
+
+    try:
+        await bot.set_chat_member_custom_tag(
+            chat_id=CHAT_ID,
+            user_id=user_id,
+            tag=role
+        )
+    except:
+        pass
+# --------------------------------------------------
+
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
@@ -102,7 +121,7 @@ async def start_reg(call: CallbackQuery, state: FSMContext):
 
 @dp.message(Form.role)
 async def p_role(m: types.Message, state: FSMContext):
-    await state.update_data(role=m.text); await m.answer("Укажите ЮЗ:"); await state.set_state(Form.user)
+    await state.update_data(role=m.text); await m.answer("Укажите ник:"); await state.set_state(Form.user)
 
 @dp.message(Form.user)
 async def p_user(m: types.Message, state: FSMContext):
@@ -154,19 +173,21 @@ async def on_chat_member_update(update: ChatMemberUpdated):
             conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
             cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
             res = cursor.fetchone(); role = res[0] if res else "Member"
+
+            # ---- ВЫЗОВ УСТАНОВКИ ТЕГА ----
+            await set_member_tag(uid)
+
             try:
-                # Назначаем минимальные админ-права для возможности отображения кастомного титула
                 await bot.promote_chat_member(
                     chat_id=CHAT_ID, user_id=uid,
                     can_manage_chat=False, can_post_messages=False, can_edit_messages=False,
-                    can_delete_messages=False, can_invite_users=True, can_restrict_members=False,
+                    can_delete_messages=False, can_invite_users=False, can_restrict_members=False,
                     can_pin_messages=False, can_promote_members=False, can_manage_video_chats=False,
                     can_anonymous=False, can_manage_topics=False
                 )
                 await bot.set_chat_administrator_custom_title(chat_id=CHAT_ID, user_id=uid, custom_title=role)
-            except Exception as e:
-                logging.error(f"Failed to promote user {uid}: {e}")
-            
+            except: pass
+
             cursor.execute("SELECT user_id FROM all_users")
             rows = cursor.fetchall(); conn.close()
             mentions = "".join([f"<a href='tg://user?id={r[0]}'>\u2060</a>" for r in rows])
@@ -193,9 +214,4 @@ async def main():
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
 
 if __name__ == "__main__":
-    async def run_bot():
-        try:
-            await main()
-        except (KeyboardInterrupt, SystemExit):
-            pass
-    asyncio.run(run_bot())
+    asyncio.run(main())
