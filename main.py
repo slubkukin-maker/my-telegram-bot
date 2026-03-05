@@ -20,7 +20,7 @@ def keep_alive():
     t.start()
 
 # --- CONFIG ---
-TOKEN = "8344752199:AAFt6L6id83M-eQZMkXKXRLhle2oP9Um98A"
+TOKEN = "8344752199:AAGDB6PqgYxnGVK-o-PjTxZf71gec_mZ_Pw"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -32,7 +32,6 @@ dp = Dispatcher()
 class Form(StatesGroup):
     role = State()
     user = State()
-    admin_reply = State()
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -58,7 +57,7 @@ async def cmd_add(m: types.Message):
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_id, role))
         conn.commit(); conn.close()
-        await m.answer(f"Добавлен: {target_id}")
+        await m.answer(f"OK: {target_id}")
     except: await m.answer("Формат: /add ID РОЛЬ")
 
 @dp.message(Command("del"))
@@ -70,7 +69,7 @@ async def cmd_delete(m: types.Message):
         cursor.execute("DELETE FROM all_users WHERE user_id = ?", (target_id,))
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (target_id,))
         conn.commit(); conn.close()
-        await m.answer(f"Пользователь {target_id} удален.")
+        await m.answer(f"Удален: {target_id}")
     except: await m.answer("Формат: /del ID")
 
 @dp.message(Command("list"))
@@ -81,7 +80,7 @@ async def cmd_list(m: types.Message):
     if not rows:
         await m.answer("EMPTY")
         return
-    text = "LIST (ID | NAME):\n"
+    text = "LIST:\n"
     for r in rows: text += f"<code>{r[0]}</code> | {r[1]}\n"
     await m.answer(text, parse_mode="HTML")
 
@@ -126,7 +125,6 @@ async def admin_btns(call: CallbackQuery):
         role = call.message.text.split("РОЛЬ: ")[1] if "РОЛЬ: " in call.message.text else "Member"
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
-        cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_uid, role))
         conn.commit(); conn.close()
         await bot.send_message(target_uid, f"Принято. Роль: {role}\n{CHAT_LINK}")
         await call.message.edit_text(call.message.text + "\nSTATUS: OK")
@@ -171,7 +169,8 @@ async def main():
         BotCommand(command="start", description="Меню"),
         BotCommand(command="all", description="Сбор"),
         BotCommand(command="list", description="База"),
-        BotCommand(command="del", description="Удалить")
+        BotCommand(command="del", description="Удалить"),
+        BotCommand(command="add", description="Добавить")
     ])
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
