@@ -22,7 +22,7 @@ def run():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- КОНФИГ (ТОКЕН ОБНОВЛЕН) ---
+# --- КОНФИГ (АКТУАЛЬНЫЙ ТОКЕН) ---
 TOKEN = "8344752199:AAFt6L6id83M-eQZMkXKXRLhle2oP9Um98A"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
@@ -55,25 +55,35 @@ def get_all_users():
     conn.close()
     return users
 
-# --- ИСПРАВЛЕННАЯ ФУНКЦИЯ ПЛАШЕК (ЧЕРЕЗ ПРЯМОЙ API ЗАПРОС) ---
+# --- УЛУЧШЕННАЯ ФУНКЦИЯ ПЛАШЕК ---
 async def set_member_tag(uid, tag_text):
     try:
+        # Проверяем статус в чате для обновления кеша Telegram
+        try:
+            await bot.get_chat_member(CHAT_ID, uid)
+        except Exception as e:
+            logging.warning(f"Ошибка проверки членства: {e}")
+
         url = f"https://api.telegram.org/bot{TOKEN}/setChatMemberTag"
         payload = {
-            "chat_id": CHAT_ID,
+            "chat_id": int(CHAT_ID),
             "user_id": int(uid),
             "tag": str(tag_text)
         }
-        # Делаем прямой запрос, чтобы обойти ограничения текущей версии aiogram
+        
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload) as response:
                 result = await response.json()
                 if result.get("ok"):
-                    return True, result
-                else:
-                    return False, result.get("description", "Unknown error")
+                    return True, "OK"
+                
+                # Если ошибка, ждем еще 3 секунды и пробуем финальный раз
+                await asyncio.sleep(3)
+                async with session.post(url, json=payload) as retry_res:
+                    retry_result = await retry_res.json()
+                    return retry_result.get("ok"), retry_result.get("description", "Error")
     except Exception as e:
-        logging.error(f"Ошибка Member Tag: {e}")
+        logging.error(f"Критическая ошибка Member Tag: {e}")
         return False, str(e)
 
 # --- УМНЫЙ СОЗЫВ ---
@@ -113,25 +123,34 @@ async def approve(call: CallbackQuery):
     if "РОЛЬ: " in call.message.text:
         role = call.message.text.split("РОЛЬ: ")[1].split("\n")[0].strip()
 
-    # Сохраняем
+    # Сохраняем в БД
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
     conn.commit()
     conn.close()
     
-    # 1. Ждем 2 секунды, чтобы Telegram "осознал", что юзер вступил
-    await asyncio.sleep(2)
+    original_text = call.message.text
+    await call.message.edit_text(original_text + "\n⏳ Синхронизация с чатом (5 сек)...")
     
-    # 2. Пытаемся поставить плашку (Тег участника)
+    # Даем Telegram время «принять» участника в списки
+    await asyncio.sleep(5)
+    
+    # Пытаемся поставить плашку
     success, error_msg = await set_member_tag(uid, role)
     
-    status_text = f"\n✅ ПРИНЯТ. ПЛАШКА '{role}' ВЫДАНА." if success else f"\n⚠️ ПРИНЯТ, НО ПЛАШКА НЕ ВЫШЛА: {error_msg}"
+    if success:
+        status_text = f"\n✅ ПРИНЯТ. ПЛАШКА '{role}' ВЫДАНА."
+    else:
+        status_text = f"\n⚠️ ПРИНЯТ, НО ПЛАШКА НЕ ВЫШЛА: {error_msg}"
     
-    await bot.send_message(uid, f"Твоя роль <b>{role}</b> подтверждена!\nВступай: {CHAT_LINK}", parse_mode="HTML")
-    await call.message.edit_text(call.message.text + status_text)
+    try:
+        await bot.send_message(uid, f"Твоя роль <b>{role}</b> подтверждена!\nВступай: {CHAT_LINK}", parse_mode="HTML")
+    except: pass
+
+    await call.message.edit_text(original_text + status_text)
     
-    # 3. Созыв
+    # Созыв
     await internal_call(role)
 
 @dp.callback_query(F.data.startswith("adm_no_"))
@@ -140,7 +159,7 @@ async def reject(call: CallbackQuery):
     await bot.send_message(uid, "Заявка отклонена.")
     await call.message.edit_text(call.message.text + "\n❌ ОТКЛОНЕНО")
 
-# --- ЧАТ ---
+# --- ЧАТ С АДМИНОМ ---
 @dp.callback_query(F.data.startswith("chat_with_"))
 async def start_reply(call: CallbackQuery, state: FSMContext):
     target_id = int(call.data.split("_")[2])
@@ -157,7 +176,7 @@ async def send_reply(m: types.Message, state: FSMContext):
     try:
         await bot.send_message(target_id, f"✉️ <b>Сообщение от администрации:</b>\n\n{m.text}", parse_mode="HTML")
         await m.answer("Отправлено!")
-    except: await m.answer("Ошибка.")
+    except: await m.answer("Ошибка отправки.")
     await state.clear()
 
 # --- РЕГИСТРАЦИЯ ---
