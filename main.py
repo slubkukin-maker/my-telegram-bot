@@ -7,8 +7,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, 
-                           CallbackQuery, ChatMemberUpdated, ChatJoinRequest)
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated
 
 # --- 24/7 SERVER ---
 app = Flask('')
@@ -21,7 +20,7 @@ def keep_alive():
     t.start()
 
 # --- CONFIG ---
-TOKEN = "8344752199:AAGDB6PqgYxnGVK-o-PjTxZf71gec_mZ_Pw"
+TOKEN = "8344752199:AAFwouRQZYV2ztyDwC44qCu8uTxq2lgWtoc"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -43,33 +42,12 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- СИСТЕМА ТЕГОВ (ПЛАШЕК) ---
-async def set_user_tag(user_id, tag):
-    try:
-        # Назначаем админом с ПУСТЫМИ правами (только ради плашки)
-        await bot.promote_chat_member(
-            chat_id=CHAT_ID, 
-            user_id=user_id, 
-            can_manage_chat=False,
-            can_delete_messages=False,
-            can_restrict_members=False,
-            can_promote_members=False,
-            can_change_info=False,
-            can_invite_users=False,
-            can_pin_messages=False,
-            can_manage_video_chats=False,
-            is_anonymous=False
-        )
-        await bot.set_chat_member_custom_title(chat_id=CHAT_ID, user_id=user_id, custom_title=tag)
-    except Exception as e:
-        logging.error(f"Ошибка плашки для {user_id}: {e}")
-
 # --- COMMANDS ---
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Вступить", callback_data="start_reg")]])
-    await m.answer(f"Ваш ID: <code>{m.from_user.id}</code>\nДля вступления нажмите кнопку ниже.", reply_markup=kb, parse_mode="HTML")
+    await m.answer(f"ID: <code>{m.from_user.id}</code>", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(Command("del"))
 async def cmd_delete(m: types.Message):
@@ -80,8 +58,9 @@ async def cmd_delete(m: types.Message):
         cursor.execute("DELETE FROM all_users WHERE user_id = ?", (target_id,))
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (target_id,))
         conn.commit(); conn.close()
-        await m.answer(f"Пользователь {target_id} удален из базы.")
-    except: await m.answer("Использование: /del ID")
+        await m.answer(f"Пользователь {target_id} удален.")
+    except:
+        await m.answer("Формат: /del ID")
 
 @dp.message(Command("list"))
 async def cmd_list(m: types.Message):
@@ -89,10 +68,11 @@ async def cmd_list(m: types.Message):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("SELECT user_id, name FROM all_users"); rows = cursor.fetchall(); conn.close()
     if not rows:
-        await m.answer("База пуста.")
+        await m.answer("EMPTY")
         return
-    text = "<b>СПИСОК УЧАСТНИКОВ:</b>\n"
-    for r in rows: text += f"<code>{r[0]}</code> | {r[1]}\n"
+    text = "LIST (ID | NAME):\n"
+    for r in rows:
+        text += f"<code>{r[0]}</code> | {r[1]}\n"
     await m.answer(text, parse_mode="HTML")
 
 @dp.message(Command("all"))
@@ -101,95 +81,99 @@ async def cmd_all(m: types.Message):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("SELECT user_id, name FROM all_users"); rows = cursor.fetchall(); conn.close()
     if not rows: return
-    
     mentions = [f"<a href='tg://user?id={r[0]}'>{r[1]}</a>" for r in rows]
     for i in range(0, len(mentions), 5):
-        await m.answer(f"📣 <b>ОБЩИЙ СБОР:</b>\n{', '.join(mentions[i:i+5])}", parse_mode="HTML")
+        await m.answer(f"SBOR:\n{', '.join(mentions[i:i+5])}", parse_mode="HTML")
 
-# --- АНКЕТА ---
+# --- АНКЕТА И КНОПКИ ---
 
 @dp.callback_query(F.data == "start_reg")
 async def start_reg(call: CallbackQuery, state: FSMContext):
-    await call.message.answer("Укажите вашу роль (она будет на плашке):")
+    await call.message.answer("Укажите роль:")
     await state.set_state(Form.role); await call.answer()
 
 @dp.message(Form.role)
 async def p_role(m: types.Message, state: FSMContext):
-    await state.update_data(role=m.text)
-    await m.answer("Укажите ваш ник/имя для базы:")
-    await state.set_state(Form.user)
+    await state.update_data(role=m.text); await m.answer("Укажите ник:"); await state.set_state(Form.user)
 
 @dp.message(Form.user)
 async def p_user(m: types.Message, state: FSMContext):
     data = await state.get_data(); role = data.get('role'); uid = m.from_user.id
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Принять ✅", callback_data=f"adm_ok_{uid}"), 
-         InlineKeyboardButton(text="Отклонить ❌", callback_data=f"adm_no_{uid}")]
+        [InlineKeyboardButton(text="Принять", callback_data=f"adm_ok_{uid}"), 
+         InlineKeyboardButton(text="Отклонить", callback_data=f"adm_no_{uid}")],
+        [InlineKeyboardButton(text="Написать", callback_data=f"adm_msg_{uid}")]
     ])
-    await bot.send_message(ADMIN_ID, f"📝 <b>НОВАЯ АНКЕТА</b>\nИмя: {m.text}\nID: {uid}\nРОЛЬ: {role}", reply_markup=kb, parse_mode="HTML")
-    await m.answer("Заявка отправлена администратору. Ожидайте уведомления."); await state.clear()
+    await bot.send_message(ADMIN_ID, f"ANKETA\nUSER: {m.text}\nID: {uid}\nROLE: {role}", reply_markup=kb)
+    await m.answer("Заявка отправлена."); await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_"))
-async def admin_btns(call: CallbackQuery):
-    action = call.data.split("_")[1]; target_uid = int(call.data.split("_")[2])
+async def admin_btns(call: CallbackQuery, state: FSMContext):
+    data_parts = call.data.split("_")
+    action = data_parts[1]; target_uid = int(data_parts[2])
     if action == "ok":
-        # Извлекаем роль из текста сообщения админа
-        role = call.message.text.split("РОЛЬ: ")[1] if "РОЛЬ: " in call.message.text else "Member"
+        role = "Member"
+        if "ROLE: " in call.message.text:
+            role = call.message.text.split("ROLE: ")[1].split("\n")[0]
+        
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
+        cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_uid, role))
         conn.commit(); conn.close()
-        
-        await bot.send_message(target_uid, f"Ваша заявка одобрена! Ваша роль: {role}\nТеперь вы можете вступить в группу:\n{CHAT_LINK}")
-        await call.message.edit_text(call.message.text + "\n\n✅ ОДОБРЕНО")
+        await bot.send_message(target_uid, f"Принято. Роль: {role}\n{CHAT_LINK}")
+        await call.message.edit_text(call.message.text + "\nSTATUS: OK")
     elif action == "no":
-        await bot.send_message(target_uid, "К сожалению, ваша заявка отклонена.")
-        await call.message.edit_text(call.message.text + "\n\n❌ ОТКЛОНЕНО")
+        await bot.send_message(target_uid, "Отклонено.")
+        await call.message.edit_text(call.message.text + "\nSTATUS: NO")
+    elif action == "msg":
+        await call.message.answer(f"Текст для {target_uid}:")
+        await state.update_data(target_to_msg=target_uid); await state.set_state(Form.admin_reply)
     await call.answer()
 
-# --- ОБРАБОТКА ЗАЯВОК И ВСТУПЛЕНИЯ ---
+@dp.message(Form.admin_reply)
+async def admin_reply_send(m: types.Message, state: FSMContext):
+    data = await state.get_data(); target = data.get('target_to_msg')
+    try:
+        await bot.send_message(target, f"Сообщение от администрации:\n\n{m.text}")
+        await m.answer("Отправлено.")
+    except: await m.answer("Ошибка.")
+    await state.clear()
 
-@dp.chat_join_request()
-async def handle_join_request(request: ChatJoinRequest):
-    uid = request.from_user.id
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
-    row = cursor.fetchone(); conn.close()
-    
-    if row:
-        await request.approve() # Авто-принятие, если в базе одобренных
-    else:
-        # Если его нет в базе — не принимаем (или можно отклонить)
-        await bot.send_message(uid, "Чтобы вступить, сначала заполните анкету в боте через /start")
-
+# --- ОБРАБОТКА ВХОДА/ВЫХОДА И СОЗЫВ ---
 @dp.chat_member()
 async def on_chat_member_update(update: ChatMemberUpdated):
-    if update.chat.id == CHAT_ID:
-        uid = update.new_chat_member.user.id
-        # Если пользователь вошел (статус member)
-        if update.new_chat_member.status == "member":
-            conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-            cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
-            row = cursor.fetchone(); conn.close()
-            
-            name = f"@{update.new_chat_member.user.username}" if update.new_chat_member.user.username else update.new_chat_member.user.first_name
-            
-            # Обновляем базу сбора
-            conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-            cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (uid, name))
-            conn.commit(); conn.close()
-
-            if row:
-                await set_user_tag(uid, row[0]) # Ставим плашку
-                await bot.send_message(CHAT_ID, f"Приветствуем нового участника {name}! Твоя роль: {row[0]}")
+    if update.chat.id != CHAT_ID: return
+    
+    uid = update.new_chat_member.user.id
+    
+    # Если вышел/удален
+    if update.new_chat_member.status in ["left", "kicked"]:
+        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+        cursor.execute("DELETE FROM all_users WHERE user_id = ?", (uid,))
+        cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
+        conn.commit(); conn.close()
+    
+    # Если вступил (новый участник)
+    elif update.new_chat_member.status == "member" and update.old_chat_member.status in ["left", "kicked", "none"]:
+        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+        cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
+        res = cursor.fetchone()
+        role = res[0] if res else "Участник"
         
-        # Если пользователь вышел/выгнали
-        elif update.new_chat_member.status in ["left", "kicked"]:
-            conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-            cursor.execute("DELETE FROM all_users WHERE user_id = ?", (uid,))
-            cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
-            conn.commit(); conn.close()
+        # Получаем всех для скрытой отметки
+        cursor.execute("SELECT user_id FROM all_users")
+        all_ids = [r[0] for r in cursor.fetchall()]
+        conn.close()
+        
+        # Формируем скрытую отметку (невидимые ссылки)
+        hidden_mentions = "".join([f"<a href='tg://user?id={user_id}'>\u2060</a>" for user_id in all_ids])
+        
+        await bot.send_message(
+            CHAT_ID, 
+            f"Общий созыв! Вступил новый человек. Роль: {role}{hidden_mentions}", 
+            parse_mode="HTML"
+        )
 
-# Захват сообщений в группе (обновление имен)
 @dp.message(F.chat.id == CHAT_ID)
 async def collect_msg(m: types.Message):
     if m.from_user.is_bot: return
@@ -201,15 +185,13 @@ async def collect_msg(m: types.Message):
 async def main():
     init_db(); keep_alive()
     await bot.set_my_commands([
-        BotCommand(command="start", description="Меню/Анкета"),
-        BotCommand(command="all", description="Общий сбор"),
-        BotCommand(command="list", description="Список базы"),
+        BotCommand(command="start", description="Меню"),
+        BotCommand(command="all", description="Сбор"),
+        BotCommand(command="list", description="База"),
         BotCommand(command="del", description="Удалить по ID")
     ])
     await bot.delete_webhook(drop_pending_updates=True)
-    # Важно добавить chat_join_request в allowed_updates
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     asyncio.run(main())
