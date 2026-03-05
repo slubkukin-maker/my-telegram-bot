@@ -20,19 +20,14 @@ CHAT_ID = -1003393441169
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
 DB_PATH = "database.db"
 
-# --- SERVER FOR RENDER (WEB BINDING) ---
 app = Flask(__name__)
-
 @app.route('/')
-def health():
-    return "OK", 200
+def health(): return "OK", 200
 
 def run_flask():
-    # Render выдает порт автоматически. Если его нет - берем 8080
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- BOT SETUP ---
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -45,8 +40,7 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS approved_users (user_id INTEGER PRIMARY KEY, role TEXT)")
     cursor.execute("CREATE TABLE IF NOT EXISTS all_users (user_id INTEGER PRIMARY KEY, name TEXT)")
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 async def apply_tag(uid, tag):
     url = f"https://api.telegram.org/bot{TOKEN}/setChatMemberTag"
@@ -55,68 +49,13 @@ async def apply_tag(uid, tag):
         async with session.post(url, json=payload) as resp:
             return await resp.json()
 
-# --- KEYBOARDS ---
-def main_kb():
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📝 Вступить")]], resize_keyboard=True)
-
-# --- COMMANDS ---
+# --- HANDLERS ---
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
-    await m.answer(f"⚙️ <b>Система Harmony</b>\nТвой ID: <code>{m.from_user.id}</code>\nДля регистрации используй кнопку ниже.", 
-                   reply_markup=main_kb(), parse_mode="HTML")
-
-@dp.message(Command("add"))
-async def cmd_add(m: types.Message):
-    if m.from_user.id != ADMIN_ID: return
-    try:
-        parts = m.text.split(maxsplit=2)
-        target_id, role = int(parts[1]), parts[2]
-        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_id, role))
-        conn.commit(); conn.close()
-        await m.answer(f"✅ ID {target_id} внесен в базу. Роль: {role}")
-    except: await m.answer("❌ Ошибка. Формат: /add ID РОЛЬ")
-
-@dp.message(Command("del"))
-async def cmd_delete(m: types.Message):
-    if m.from_user.id != ADMIN_ID: return
-    try:
-        target_id = int(m.text.split()[1])
-        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-        cursor.execute("DELETE FROM all_users WHERE user_id = ?", (target_id,))
-        cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (target_id,))
-        conn.commit(); conn.close()
-        await m.answer(f"🗑 ID {target_id} полностью удален.")
-    except: await m.answer("❌ Ошибка. Формат: /del ID")
-
-@dp.message(Command("list"))
-async def cmd_list(m: types.Message):
-    if m.from_user.id != ADMIN_ID: return
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("SELECT user_id, name FROM all_users"); rows = cursor.fetchall(); conn.close()
-    if not rows:
-        await m.answer("📁 База пуста.")
-        return
-    text = "📋 <b>БАЗА (ID | ЮЗ):</b>\n"
-    for r in rows: text += f"<code>{r[0]}</code> | {r[1]}\n"
-    await m.answer(text, parse_mode="HTML")
-
-@dp.message(Command("all"))
-async def cmd_all(m: types.Message):
-    if m.from_user.id != ADMIN_ID: return
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM all_users"); rows = cursor.fetchall(); conn.close()
-    if not rows: return
-    await m.answer("🔊 <b>ОБЩИЙ СБОР!</b>")
-    users = [r[0] for r in rows]
-    for i in range(0, len(users), 5):
-        chunk = users[i:i+5]
-        mentions = "".join([f'<a href="tg://user?id={uid}">\u200b</a>' for uid in chunk])
-        await m.answer(f"⚡️ {mentions}", parse_mode="HTML")
-        await asyncio.sleep(0.4)
-
-# --- REGISTRATION ---
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📝 Вступить")]], resize_keyboard=True)
+    await m.answer(f"⚙️ <b>Harmony System</b>\nТвой ID: <code>{m.from_user.id}</code>\nИспользуй кнопку для регистрации.", 
+                   reply_markup=kb, parse_mode="HTML")
 
 @dp.message(F.text == "📝 Вступить")
 async def start_reg_text(m: types.Message, state: FSMContext):
@@ -136,8 +75,8 @@ async def p_user(m: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="Принять ✅", callback_data=f"adm_ok_{uid}"), 
          InlineKeyboardButton(text="Отклонить ❌", callback_data=f"adm_no_{uid}")]
     ])
-    await bot.send_message(ADMIN_ID, f"📩 <b>НОВАЯ АНКЕТА</b>\nЮЗ: {m.text}\nID: {uid}\nРОЛЬ: {role}", reply_markup=kb, parse_mode="HTML")
-    await m.answer("📨 Твоя анкета отправлена администрации.")
+    await bot.send_message(ADMIN_ID, f"📩 <b>АНКЕТА</b>\nЮЗ: {m.text}\nID: {uid}\nРОЛЬ: {role}", reply_markup=kb, parse_mode="HTML")
+    await m.answer("📨 Заявка отправлена.")
     await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_"))
@@ -148,19 +87,12 @@ async def admin_btns(call: CallbackQuery):
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
         conn.commit(); conn.close()
-        await bot.send_message(target_uid, f"🎉 Одобрено! Роль <b>{role}</b> применится при входе.\n{CHAT_LINK}", parse_mode="HTML")
-        await call.message.edit_text(call.message.text + "\n\n✅ <b>СТАТУС: ПРИНЯТ</b>", parse_mode="HTML")
+        await bot.send_message(target_uid, f"🎉 Одобрено! Плашка появится при входе.\n{CHAT_LINK}", parse_mode="HTML")
+        await call.message.edit_text(call.message.text + "\n✅ ПРИНЯТ")
     elif action == "no":
-        await bot.send_message(target_uid, "❌ Твоя заявка была отклонена.")
-        await call.message.edit_text(call.message.text + "\n\n❌ <b>СТАТУС: ОТКЛОНЕН</b>", parse_mode="HTML")
+        await bot.send_message(target_uid, "❌ Отклонено.")
+        await call.message.edit_text(call.message.text + "\n❌ ОТКЛОНЕН")
     await call.answer()
-
-# --- JOIN LOGIC ---
-
-@dp.chat_join_request()
-async def auto_approve(request: ChatJoinRequest):
-    try: await request.approve()
-    except: pass
 
 @dp.chat_member()
 async def on_chat_member_update(update: ChatMemberUpdated):
@@ -171,31 +103,19 @@ async def on_chat_member_update(update: ChatMemberUpdated):
             cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
             row = cursor.fetchone(); conn.close()
             if row:
-                role = row[0]
                 await asyncio.sleep(2)
-                await apply_tag(uid, role) # Твоя техника плашек
+                await apply_tag(uid, row[0])
                 name = f"@{update.new_chat_member.user.username}" if update.new_chat_member.user.username else update.new_chat_member.user.first_name
                 conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
                 cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (uid, name))
                 conn.commit(); conn.close()
-        elif update.new_chat_member.status in ["left", "kicked"]:
-            conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-            cursor.execute("DELETE FROM all_users WHERE user_id = ?", (uid,))
-            cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
-            conn.commit(); conn.close()
 
+# --- ЗАПУСК ---
 async def main():
     init_db()
-    # Запускаем сервер Flask ДО основного цикла бота
     Thread(target=run_flask, daemon=True).start()
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Меню"),
-        BotCommand(command="all", description="Сбор"),
-        BotCommand(command="list", description="Список"),
-        BotCommand(command="del", description="Удалить"),
-        BotCommand(command="add", description="Добавить")
-    ])
     await bot.delete_webhook(drop_pending_updates=True)
+    # polling с разрешением всех обновлений
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
 
 if __name__ == "__main__":
