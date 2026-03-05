@@ -11,19 +11,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton, 
                            InlineKeyboardButton, InlineKeyboardMarkup, 
-                           CallbackQuery, ChatJoinRequest)
+                           CallbackQuery, ChatJoinRequest, ChatMemberUpdated)
 
 # --- SERVER ---
 app = Flask('')
 @app.route('/')
-def home(): return "Harmony: Плашки и Созыв"
+def home(): return "Harmony: Плашки при вступлении"
 
 def run():
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- КОНФИГ (АКТУАЛЬНЫЙ ТОКЕН) ---
-TOKEN = "8344752199:AAFt6L6id83M-eQZMkXKXRLhle2oP9Um98A"
+# --- КОНФИГ (ТОКЕН ОБНОВЛЕН) ---
+TOKEN = "8344752199:AAFwouRQZYV2ztyDwC44qCu8uTxq2lgWtoc"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -47,44 +47,29 @@ def init_db():
     conn.commit()
     conn.close()
 
+def get_user_role(uid):
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
+    res = cursor.fetchone(); conn.close()
+    return res[0] if res else None
+
 def get_all_users():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM approved_users")
-    users = [row[0] for row in cursor.fetchall()]
-    conn.close()
+    users = [row[0] for row in cursor.fetchall()]; conn.close()
     return users
 
-# --- УЛУЧШЕННАЯ ФУНКЦИЯ ПЛАШЕК ---
+# --- ФУНКЦИЯ ПЛАШЕК (ЧЕРЕЗ API) ---
 async def set_member_tag(uid, tag_text):
     try:
-        # Проверяем статус в чате для обновления кеша Telegram
-        try:
-            await bot.get_chat_member(CHAT_ID, uid)
-        except Exception as e:
-            logging.warning(f"Ошибка проверки членства: {e}")
-
         url = f"https://api.telegram.org/bot{TOKEN}/setChatMemberTag"
-        payload = {
-            "chat_id": int(CHAT_ID),
-            "user_id": int(uid),
-            "tag": str(tag_text)
-        }
-        
+        payload = {"chat_id": CHAT_ID, "user_id": int(uid), "tag": str(tag_text)}
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload) as response:
-                result = await response.json()
-                if result.get("ok"):
-                    return True, "OK"
-                
-                # Если ошибка, ждем еще 3 секунды и пробуем финальный раз
-                await asyncio.sleep(3)
-                async with session.post(url, json=payload) as retry_res:
-                    retry_result = await retry_res.json()
-                    return retry_result.get("ok"), retry_result.get("description", "Error")
+                return await response.json()
     except Exception as e:
-        logging.error(f"Критическая ошибка Member Tag: {e}")
-        return False, str(e)
+        logging.error(f"Ошибка Member Tag: {e}")
+        return None
 
 # --- УМНЫЙ СОЗЫВ ---
 async def internal_call(new_member_role):
@@ -100,58 +85,49 @@ async def internal_call(new_member_role):
             await asyncio.sleep(0.6)
         except: pass
 
-# --- АВТО-ПРИЕМ ---
+# --- ТЕХНИКА: АВТО-ПЛАШКА ПРИ ВСТУПЛЕНИИ ---
+@dp.chat_member()
+async def on_member_join(update: ChatMemberUpdated):
+    # Если юзер только что стал участником (member)
+    if update.chat.id == CHAT_ID and update.new_chat_member.status == "member":
+        uid = update.new_chat_member.user.id
+        role = get_user_role(uid)
+        
+        if role:
+            # Магия: вешаем плашку, как только он зашел
+            await asyncio.sleep(1) # Микро-пауза для прогрузки
+            res = await set_member_tag(uid, role)
+            logging.info(f"Авто-тег для {uid} ({role}): {res}")
+            
+            # Созыв
+            await internal_call(role)
+
+# --- АВТО-ПРИЕМ ЗАЯВОК ---
 @dp.chat_join_request()
 async def auto_approve(request: ChatJoinRequest):
     try:
         await request.approve()
         await bot.send_message(
             request.from_user.id, 
-            "<b>Добро пожаловать!</b> ✅ Заявка одобрена.\n\nЖми <b>📝 Вступить</b>, чтобы заполнить анкету и получить плашку.",
-            reply_markup=get_main_kb(), parse_mode="HTML"
+            "<b>Заявка одобрена!</b> ✅\n\nЧтобы получить роль (плашку), нажми кнопку ниже:",
+            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📝 Вступить")]], resize_keyboard=True),
+            parse_mode="HTML"
         )
     except: pass
-
-def get_main_kb():
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📝 Вступить")]], resize_keyboard=True)
 
 # --- ОБРАБОТКА АНКЕТЫ ---
 @dp.callback_query(F.data.startswith("adm_ok_"))
 async def approve(call: CallbackQuery):
     uid = int(call.data.split("_")[2])
-    role = "Участник"
-    if "РОЛЬ: " in call.message.text:
-        role = call.message.text.split("РОЛЬ: ")[1].split("\n")[0].strip()
+    role = call.message.text.split("РОЛЬ: ")[1].split("\n")[0].strip() if "РОЛЬ: " in call.message.text else "Участник"
 
-    # Сохраняем в БД
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    # Сохраняем роль в БД (чтобы выдать её при вступлении)
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (uid, role))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
     
-    original_text = call.message.text
-    await call.message.edit_text(original_text + "\n⏳ Синхронизация с чатом (5 сек)...")
-    
-    # Даем Telegram время «принять» участника в списки
-    await asyncio.sleep(5)
-    
-    # Пытаемся поставить плашку
-    success, error_msg = await set_member_tag(uid, role)
-    
-    if success:
-        status_text = f"\n✅ ПРИНЯТ. ПЛАШКА '{role}' ВЫДАНА."
-    else:
-        status_text = f"\n⚠️ ПРИНЯТ, НО ПЛАШКА НЕ ВЫШЛА: {error_msg}"
-    
-    try:
-        await bot.send_message(uid, f"Твоя роль <b>{role}</b> подтверждена!\nВступай: {CHAT_LINK}", parse_mode="HTML")
-    except: pass
-
-    await call.message.edit_text(original_text + status_text)
-    
-    # Созыв
-    await internal_call(role)
+    await bot.send_message(uid, f"Твоя роль <b>{role}</b> утверждена!\nТеперь заходи в чат: {CHAT_LINK}", parse_mode="HTML")
+    await call.message.edit_text(call.message.text + f"\n✅ ОДОБРЕНО. Роль {role} выдастся автоматически при входе.")
 
 @dp.callback_query(F.data.startswith("adm_no_"))
 async def reject(call: CallbackQuery):
@@ -159,56 +135,50 @@ async def reject(call: CallbackQuery):
     await bot.send_message(uid, "Заявка отклонена.")
     await call.message.edit_text(call.message.text + "\n❌ ОТКЛОНЕНО")
 
-# --- ЧАТ С АДМИНОМ ---
-@dp.callback_query(F.data.startswith("chat_with_"))
-async def start_reply(call: CallbackQuery, state: FSMContext):
-    target_id = int(call.data.split("_")[2])
-    await state.update_data(reply_to=target_id)
-    await state.set_state(AdminChat.waiting_for_reply)
-    await call.message.answer(f"Напиши сообщение для {target_id}:")
-    await call.answer()
-
-@dp.message(AdminChat.waiting_for_reply)
-async def send_reply(m: types.Message, state: FSMContext):
-    if m.from_user.id != ADMIN_ID: return
-    data = await state.get_data()
-    target_id = data.get("reply_to")
-    try:
-        await bot.send_message(target_id, f"✉️ <b>Сообщение от администрации:</b>\n\n{m.text}", parse_mode="HTML")
-        await m.answer("Отправлено!")
-    except: await m.answer("Ошибка отправки.")
-    await state.clear()
-
 # --- РЕГИСТРАЦИЯ ---
 @dp.message(F.text == "📝 Вступить")
 async def start_reg(m: types.Message, state: FSMContext):
-    await m.answer("Напиши свою роль:")
-    await state.set_state(RegForm.role)
+    await m.answer("Напиши свою роль (например: Ризли):"); await state.set_state(RegForm.role)
 
 @dp.message(RegForm.role)
 async def p_role(m: types.Message, state: FSMContext):
     await state.update_data(role=m.text)
-    await m.answer("Напиши свой @username:")
-    await state.set_state(RegForm.username)
+    await m.answer("Напиши свой ник или @username:"); await state.set_state(RegForm.username)
 
 @dp.message(RegForm.username)
 async def p_user(m: types.Message, state: FSMContext):
     data = await state.get_data()
+    uid = m.from_user.id
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Принять ✅", callback_data=f"adm_ok_{m.from_user.id}")],
-        [InlineKeyboardButton(text="Отклонить ❌", callback_data=f"adm_no_{m.from_user.id}")],
-        [InlineKeyboardButton(text="Написать 💬", callback_data=f"chat_with_{m.from_user.id}")]
+        [InlineKeyboardButton(text="Принять ✅", callback_data=f"adm_ok_{uid}")],
+        [InlineKeyboardButton(text="Отклонить ❌", callback_data=f"adm_no_{uid}")],
+        [InlineKeyboardButton(text="Написать 💬", callback_data=f"chat_with_{uid}")]
     ])
-    await bot.send_message(ADMIN_ID, f"<b>АНКЕТА</b>\nЮЗ: {m.text}\nID: {m.from_user.id}\nРОЛЬ: {data['role']}", reply_markup=kb, parse_mode="HTML")
-    await m.answer("Заявка ушла!")
-    await state.clear()
+    await bot.send_message(ADMIN_ID, f"<b>АНКЕТА</b>\nЮЗ: {m.text}\nID: {uid}\nРОЛЬ: {data['role']}", reply_markup=kb, parse_mode="HTML")
+    await m.answer("Анкета отправлена на проверку!"); await state.clear()
+
+# --- ЧАТ С АДМИНОМ (ОБРАТНАЯ СВЯЗЬ) ---
+@dp.callback_query(F.data.startswith("chat_with_"))
+async def start_reply(call: CallbackQuery, state: FSMContext):
+    target_id = int(call.data.split("_")[2])
+    await state.update_data(reply_to=target_id); await state.set_state(AdminChat.waiting_for_reply)
+    await call.message.answer(f"Пиши ответ для {target_id}:"); await call.answer()
+
+@dp.message(AdminChat.waiting_for_reply)
+async def send_reply(m: types.Message, state: FSMContext):
+    if m.from_user.id != ADMIN_ID: return
+    data = await state.get_data(); target_id = data.get("reply_to")
+    try:
+        await bot.send_message(target_id, f"✉️ <b>Сообщение от админа:</b>\n\n{m.text}", parse_mode="HTML")
+        await m.answer("Отправлено!"); await state.clear()
+    except: await m.answer("Ошибка.")
 
 async def main():
     init_db()
     Thread(target=run, daemon=True).start()
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_join_request"])
+    # Важно: добавляем chat_member в список разрешенных обновлений
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_join_request", "chat_member"])
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+    logging.basicConfig(level=logging.INFO); asyncio.run(main())
