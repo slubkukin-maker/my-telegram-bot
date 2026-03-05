@@ -10,24 +10,17 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated
 from aiogram.exceptions import TelegramBadRequest
 
-# Настройка логирования, чтобы видеть ошибки в консоли Render
-logging.basicConfig(level=logging.INFO)
-
 # --- 24/7 SERVER ---
 app = Flask('')
 @app.route('/')
-def home(): return "Бот работает!"
-
-def run():
-    app.run(host='0.0.0.0', port=8080)
-
+def home(): return "Bot is Online"
+def run(): app.run(host='0.0.0.0', port=8080)
 def keep_alive():
     t = Thread(target=run)
     t.daemon = True
     t.start()
 
 # --- CONFIG ---
-# ВАЖНО: Никогда не свети токен публично! 
 TOKEN = "8344752199:AAGDB6PqgYxnGVK-o-PjTxZf71gec_mZ_Pw"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
@@ -41,34 +34,27 @@ class Form(StatesGroup):
     role = State()
     user = State()
 
-# --- DATABASE ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    # Храним одобренных и их роли
     cursor.execute("CREATE TABLE IF NOT EXISTS approved_users (user_id INTEGER PRIMARY KEY, role TEXT)")
-    # Храним всех для рассылки /all
     cursor.execute("CREATE TABLE IF NOT EXISTS all_users (user_id INTEGER PRIMARY KEY, name TEXT)")
     conn.commit()
     conn.close()
 
-# --- СИСТЕМА ПЛАШЕК (ИСПРАВЛЕНО) ---
+# --- СИСТЕМА ПЛАШЕК ---
 async def set_user_tag(user_id, tag):
     try:
-        # В новом обновлении важно: сначала даем права "пустого" админа
-        # can_manage_chat=True больше не достаточно, нужно явно разрешить смену инфо
+        # Сначала повышаем до админа (пустого), чтобы была возможность поставить титул
         await bot.promote_chat_member(
             chat_id=CHAT_ID, 
             user_id=user_id, 
             can_manage_chat=True,
-            can_invite_users=True # Минимальное право для отображения в списке
+            can_invite_users=True
         )
-        # Ждем секунду, чтобы сервера TG обновили статус
+        # Небольшая пауза для обработки серверами TG
         await asyncio.sleep(1)
         await bot.set_chat_member_custom_title(chat_id=CHAT_ID, user_id=user_id, custom_title=tag)
-        logging.info(f"Плашка {tag} установлена для {user_id}")
-    except TelegramBadRequest as e:
-        logging.error(f"Ошибка прав (бот должен быть выше юзера): {e}")
     except Exception as e:
         logging.error(f"Не удалось поставить плашку {user_id}: {e}")
 
@@ -77,7 +63,7 @@ async def set_user_tag(user_id, tag):
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Вступить", callback_data="start_reg")]])
-    await m.answer(f"Твой ID: <code>{m.from_user.id}</code>\nНажми кнопку ниже, чтобы подать заявку.", reply_markup=kb, parse_mode="HTML")
+    await m.answer(f"ID: <code>{m.from_user.id}</code>", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(Command("del"))
 async def cmd_delete(m: types.Message):
@@ -88,8 +74,8 @@ async def cmd_delete(m: types.Message):
         cursor.execute("DELETE FROM all_users WHERE user_id = ?", (target_id,))
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (target_id,))
         conn.commit(); conn.close()
-        await m.answer(f"Пользователь {target_id} удален из базы.")
-    except: await m.answer("Формат: /del 123456789")
+        await m.answer(f"Пользователь {target_id} удален.")
+    except: await m.answer("Формат: /del ID")
 
 @dp.message(Command("list"))
 async def cmd_list(m: types.Message):
@@ -97,9 +83,9 @@ async def cmd_list(m: types.Message):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("SELECT user_id, name FROM all_users"); rows = cursor.fetchall(); conn.close()
     if not rows:
-        await m.answer("База пуста.")
+        await m.answer("EMPTY")
         return
-    text = "<b>Список пользователей:</b>\n"
+    text = "LIST (ID | NAME):\n"
     for r in rows: text += f"<code>{r[0]}</code> | {r[1]}\n"
     await m.answer(text, parse_mode="HTML")
 
@@ -111,7 +97,6 @@ async def cmd_all(m: types.Message):
     if not rows: return
     
     mentions = [f"<a href='tg://user?id={r[0]}'>{r[1]}</a>" for r in rows]
-    # По 5 человек, чтобы не спамить
     for i in range(0, len(mentions), 5):
         await m.answer(f"📣 <b>ОБЩИЙ СБОР:</b>\n{', '.join(mentions[i:i+5])}", parse_mode="HTML")
 
@@ -119,59 +104,40 @@ async def cmd_all(m: types.Message):
 
 @dp.callback_query(F.data == "start_reg")
 async def start_reg(call: CallbackQuery, state: FSMContext):
-    await call.message.answer("Введите вашу роль (например: Лидер, Боец):")
-    await state.set_state(Form.role)
-    await call.answer()
+    await call.message.answer("Укажите роль:")
+    await state.set_state(Form.role); await call.answer()
 
 @dp.message(Form.role)
 async def p_role(m: types.Message, state: FSMContext):
-    await state.update_data(role=m.text)
-    await m.answer("Введите ваш Никнейм:")
-    await state.set_state(Form.user)
+    await state.update_data(role=m.text); await m.answer("Укажите ник:"); await state.set_state(Form.user)
 
 @dp.message(Form.user)
 async def p_user(m: types.Message, state: FSMContext):
-    data = await state.get_data()
-    role = data.get('role')
-    user_name = m.text
-    uid = m.from_user.id
-    
+    data = await state.get_data(); role = data.get('role'); uid = m.from_user.id
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Принять", callback_data=f"adm_ok_{uid}"), 
-         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_no_{uid}")]
+        [InlineKeyboardButton(text="Принять", callback_data=f"adm_ok_{uid}"), 
+         InlineKeyboardButton(text="Отклонить", callback_data=f"adm_no_{uid}")]
     ])
-    
-    await bot.send_message(ADMIN_ID, f"🆕 <b>НОВАЯ АНКЕТА</b>\n<b>Юзер:</b> {user_name}\n<b>ID:</b> {uid}\n<b>Роль:</b> {role}", reply_markup=kb, parse_mode="HTML")
-    await m.answer("Твоя заявка отправлена админу. Жди одобрения!")
-    await state.clear()
+    await bot.send_message(ADMIN_ID, f"ANKETA\nUSER: {m.text}\nID: {uid}\nROLE: {role}", reply_markup=kb)
+    await m.answer("Заявка отправлена."); await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_"))
 async def admin_btns(call: CallbackQuery):
-    data_parts = call.data.split("_")
-    action = data_parts[1]
-    target_uid = int(data_parts[2])
-    
+    action = call.data.split("_")[1]; target_uid = int(call.data.split("_")[2])
     if action == "ok":
-        # Вытаскиваем роль из текста сообщения админа
-        role = "Member"
-        if "Роль: " in call.message.text:
-            role = call.message.text.split("Роль: ")[1].split("\n")[0]
-            
+        role = call.message.text.split("ROLE: ")[1] if "ROLE: " in call.message.text else "Member"
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
-        # Сразу добавляем в список для сбора (имя пока ставим роль)
         cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_uid, role))
         conn.commit(); conn.close()
         
-        await bot.send_message(target_uid, f"Поздравляю! Ты принят.\nРоль: <b>{role}</b>\nВступай в чат: {CHAT_LINK}", parse_mode="HTML")
-        await call.message.edit_text(call.message.text + "\n\n✅ <b>ОДОБРЕНО</b>", parse_mode="HTML")
-        
-        # Пытаемся поставить плашку (сработает, если он уже в чате)
         await set_user_tag(target_uid, role)
         
+        await bot.send_message(target_uid, f"Принято. Роль: {role}\n{CHAT_LINK}")
+        await call.message.edit_text(call.message.text + "\nSTATUS: OK")
     elif action == "no":
-        await bot.send_message(target_uid, "К сожалению, твоя заявка отклонена.")
-        await call.message.edit_text(call.message.text + "\n\n❌ <b>ОТКЛОНЕНО</b>", parse_mode="HTML")
+        await bot.send_message(target_uid, "Отклонено.")
+        await call.message.edit_text(call.message.text + "\nSTATUS: NO")
     await call.answer()
 
 # --- ВХОД / ВЫХОД ---
@@ -179,26 +145,22 @@ async def admin_btns(call: CallbackQuery):
 async def on_chat_member_update(update: ChatMemberUpdated):
     if update.chat.id == CHAT_ID:
         uid = update.new_chat_member.user.id
-        # Если зашел
         if update.new_chat_member.status == "member":
             conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
             cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
             row = cursor.fetchone(); conn.close()
             if row:
-                role = row[0]
-                await set_user_tag(uid, role)
+                await set_user_tag(uid, row[0])
                 name = f"@{update.new_chat_member.user.username}" if update.new_chat_member.user.username else update.new_chat_member.user.first_name
                 conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
                 cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (uid, name))
                 conn.commit(); conn.close()
-        # Если вышел или выгнали
         elif update.new_chat_member.status in ["left", "kicked"]:
             conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
             cursor.execute("DELETE FROM all_users WHERE user_id = ?", (uid,))
             cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
             conn.commit(); conn.close()
 
-# Сбор ников из сообщений
 @dp.message(F.chat.id == CHAT_ID)
 async def collect_msg(m: types.Message):
     if m.from_user.is_bot: return
@@ -208,20 +170,15 @@ async def collect_msg(m: types.Message):
     conn.commit(); conn.close()
 
 async def main():
-    init_db()
-    keep_alive()
+    init_db(); keep_alive()
     await bot.set_my_commands([
-        BotCommand(command="start", description="Подать заявку"),
-        BotCommand(command="all", description="Вызвать всех"),
-        BotCommand(command="list", description="Список базы"),
-        BotCommand(command="del", description="Удалить юзера")
+        BotCommand(command="start", description="Меню"),
+        BotCommand(command="all", description="Сбор"),
+        BotCommand(command="list", description="База"),
+        BotCommand(command="del", description="Удалить")
     ])
     await bot.delete_webhook(drop_pending_updates=True)
-    # Важно: добавили chat_member в разрешенные апдейты
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Бот остановлен")
+    asyncio.run(main())
