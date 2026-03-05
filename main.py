@@ -20,14 +20,19 @@ CHAT_ID = -1003393441169
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
 DB_PATH = "database.db"
 
+# --- WEB SERVER (RENDER FIX) ---
 app = Flask(__name__)
+
 @app.route('/')
-def health(): return "OK", 200
+def health():
+    return "Bot is alive", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    # Биндим на 0.0.0.0 — это критично для Render
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
+# --- BOT LOGIC ---
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -40,22 +45,39 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS approved_users (user_id INTEGER PRIMARY KEY, role TEXT)")
     cursor.execute("CREATE TABLE IF NOT EXISTS all_users (user_id INTEGER PRIMARY KEY, name TEXT)")
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
 
 async def apply_tag(uid, tag):
     url = f"https://api.telegram.org/bot{TOKEN}/setChatMemberTag"
     payload = {"chat_id": CHAT_ID, "user_id": int(uid), "tag": str(tag)}
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload) as resp:
-            return await resp.json()
+        try:
+            async with session.post(url, json=payload) as resp:
+                return await resp.json()
+        except Exception as e:
+            logging.error(f"Tag error: {e}")
 
-# --- HANDLERS ---
+# --- COMMANDS ---
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📝 Вступить")]], resize_keyboard=True)
-    await m.answer(f"⚙️ <b>Harmony System</b>\nТвой ID: <code>{m.from_user.id}</code>\nИспользуй кнопку для регистрации.", 
+    await m.answer(f"🤖 <b>Система активна</b>\nТвой ID: <code>{m.from_user.id}</code>\nИспользуй кнопку ниже.", 
                    reply_markup=kb, parse_mode="HTML")
+
+@dp.message(Command("all"))
+async def cmd_all(m: types.Message):
+    if m.from_user.id != ADMIN_ID: return
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM all_users"); rows = cursor.fetchall(); conn.close()
+    if not rows: return
+    await m.answer("📢 <b>ОБЩИЙ СБОР!</b>")
+    users = [r[0] for r in rows]
+    for i in range(0, len(users), 5):
+        chunk = users[i:i+5]
+        mentions = "".join([f'<a href="tg://user?id={uid}">\u200b</a>' for uid in chunk])
+        await m.answer(f"⚡️ {mentions}", parse_mode="HTML")
 
 @dp.message(F.text == "📝 Вступить")
 async def start_reg_text(m: types.Message, state: FSMContext):
@@ -76,7 +98,7 @@ async def p_user(m: types.Message, state: FSMContext):
          InlineKeyboardButton(text="Отклонить ❌", callback_data=f"adm_no_{uid}")]
     ])
     await bot.send_message(ADMIN_ID, f"📩 <b>АНКЕТА</b>\nЮЗ: {m.text}\nID: {uid}\nРОЛЬ: {role}", reply_markup=kb, parse_mode="HTML")
-    await m.answer("📨 Заявка отправлена.")
+    await m.answer("📨 Заявка отправлена администрации.")
     await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_"))
@@ -87,11 +109,11 @@ async def admin_btns(call: CallbackQuery):
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
         conn.commit(); conn.close()
-        await bot.send_message(target_uid, f"🎉 Одобрено! Плашка появится при входе.\n{CHAT_LINK}", parse_mode="HTML")
-        await call.message.edit_text(call.message.text + "\n✅ ПРИНЯТ")
+        await bot.send_message(target_uid, f"✅ Принято! Роль <b>{role}</b> применится при входе.\n{CHAT_LINK}", parse_mode="HTML")
+        await call.message.edit_text(call.message.text + "\n\n🟢 <b>ОДОБРЕНО</b>")
     elif action == "no":
-        await bot.send_message(target_uid, "❌ Отклонено.")
-        await call.message.edit_text(call.message.text + "\n❌ ОТКЛОНЕН")
+        await bot.send_message(target_uid, "❌ Твоя заявка отклонена.")
+        await call.message.edit_text(call.message.text + "\n\n🔴 <b>ОТКЛОНЕНО</b>")
     await call.answer()
 
 @dp.chat_member()
@@ -110,14 +132,23 @@ async def on_chat_member_update(update: ChatMemberUpdated):
                 cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (uid, name))
                 conn.commit(); conn.close()
 
-# --- ЗАПУСК ---
+# --- MAIN ---
 async def main():
     init_db()
-    Thread(target=run_flask, daemon=True).start()
+    # Запуск веб-сервера в потоке
+    server_thread = Thread(target=run_flask)
+    server_thread.daemon = True
+    server_thread.start()
+    
+    # Даем серверу 2 секунды, чтобы Render его задетектил
+    await asyncio.sleep(2)
+    
     await bot.delete_webhook(drop_pending_updates=True)
-    # polling с разрешением всех обновлений
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot stopped")
