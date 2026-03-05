@@ -20,7 +20,7 @@ def keep_alive():
     t.start()
 
 # --- CONFIG ---
-TOKEN = "8344752199:AAGDB6PqgYxnGVK-o-PjTxZf71gec_mZ_Pw"
+TOKEN = "8344752199:AAFwouRQZYV2ztyDwC44qCu8uTxq2lgWtoc"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -42,15 +42,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- СИСТЕМА ПЛАШЕК ---
-async def set_user_tag(user_id, tag):
-    try:
-        # Чтобы поставить плашку, бот должен сначала сделать юзера админом без прав
-        await bot.promote_chat_member(chat_id=CHAT_ID, user_id=user_id, can_manage_chat=True)
-        await bot.set_chat_member_custom_title(chat_id=CHAT_ID, user_id=user_id, custom_title=tag)
-    except Exception as e:
-        logging.error(f"Не удалось поставить плашку {user_id}: {e}")
-
 # --- COMMANDS ---
 
 @dp.message(Command("start"))
@@ -68,7 +59,8 @@ async def cmd_delete(m: types.Message):
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (target_id,))
         conn.commit(); conn.close()
         await m.answer(f"Пользователь {target_id} удален.")
-    except: await m.answer("Формат: /del ID")
+    except:
+        await m.answer("Формат: /del ID")
 
 @dp.message(Command("list"))
 async def cmd_list(m: types.Message):
@@ -79,10 +71,11 @@ async def cmd_list(m: types.Message):
         await m.answer("EMPTY")
         return
     text = "LIST (ID | NAME):\n"
-    for r in rows: text += f"<code>{r[0]}</code> | {r[1]}\n"
+    for r in rows:
+        text += f"<code>{r[0]}</code> | {r[1]}\n"
     await m.answer(text, parse_mode="HTML")
 
-# ТОТ САМЫЙ СТАРЫЙ СБОР
+# ТВОЙ СБОР (СТАРЫЙ МЕТОД)
 @dp.message(Command("all"))
 async def cmd_all(m: types.Message):
     if m.from_user.id != ADMIN_ID: return
@@ -91,11 +84,10 @@ async def cmd_all(m: types.Message):
     if not rows: return
     
     mentions = [f"<a href='tg://user?id={r[0]}'>{r[1]}</a>" for r in rows]
-    # Разбиваем по 5 человек, чтобы Telegram не забанил за спам
     for i in range(0, len(mentions), 5):
         await m.answer(f"📣 <b>ОБЩИЙ СБОР:</b>\n{', '.join(mentions[i:i+5])}", parse_mode="HTML")
 
-# --- АНКЕТА ---
+# --- АНКЕТА И КНОПКИ ---
 
 @dp.callback_query(F.data == "start_reg")
 async def start_reg(call: CallbackQuery, state: FSMContext):
@@ -117,19 +109,14 @@ async def p_user(m: types.Message, state: FSMContext):
     await m.answer("Заявка отправлена."); await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_"))
-async def admin_btns(call: CallbackQuery):
+async def admin_btns(call: CallbackQuery, state: FSMContext):
     action = call.data.split("_")[1]; target_uid = int(call.data.split("_")[2])
     if action == "ok":
         role = call.message.text.split("ROLE: ")[1] if "ROLE: " in call.message.text else "Member"
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
-        # Сразу записываем в список сбора с ролью вместо имени, пока он не написал в чат
         cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_uid, role))
         conn.commit(); conn.close()
-        
-        # СТАВИМ ПЛАШКУ СРАЗУ
-        await set_user_tag(target_uid, role)
-        
         await bot.send_message(target_uid, f"Принято. Роль: {role}\n{CHAT_LINK}")
         await call.message.edit_text(call.message.text + "\nSTATUS: OK")
     elif action == "no":
@@ -141,25 +128,14 @@ async def admin_btns(call: CallbackQuery):
 @dp.chat_member()
 async def on_chat_member_update(update: ChatMemberUpdated):
     if update.chat.id == CHAT_ID:
-        uid = update.new_chat_member.user.id
-        if update.new_chat_member.status == "member":
-            conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-            cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
-            row = cursor.fetchone(); conn.close()
-            if row:
-                # ВЕШАЕМ ПЛАШКУ ПРИ ВХОДЕ
-                await set_user_tag(uid, row[0])
-                name = f"@{update.new_chat_member.user.username}" if update.new_chat_member.user.username else update.new_chat_member.user.first_name
-                conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-                cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (uid, name))
-                conn.commit(); conn.close()
-        elif update.new_chat_member.status in ["left", "kicked"]:
+        if update.new_chat_member.status in ["left", "kicked"]:
+            uid = update.new_chat_member.user.id
             conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
             cursor.execute("DELETE FROM all_users WHERE user_id = ?", (uid,))
             cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
             conn.commit(); conn.close()
 
-# Захват сообщений в группе (для обновления базы сбора)
+# Захват сообщений в группе (сбор участников)
 @dp.message(F.chat.id == CHAT_ID)
 async def collect_msg(m: types.Message):
     if m.from_user.is_bot: return
@@ -174,7 +150,7 @@ async def main():
         BotCommand(command="start", description="Меню"),
         BotCommand(command="all", description="Сбор"),
         BotCommand(command="list", description="База"),
-        BotCommand(command="del", description="Удалить")
+        BotCommand(command="del", description="Удалить по ID")
     ])
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
