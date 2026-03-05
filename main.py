@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated
 
 # --- 24/7 SERVER ---
 app = Flask('')
@@ -20,7 +20,7 @@ def keep_alive():
     t.start()
 
 # --- CONFIG ---
-TOKEN = "8344752199:AAFwouRQZYV2ztyDwC44qCu8uTxq2lgWtoc"
+TOKEN = "8344752199:AAFt6L6id83M-eQZMkXKXRLhle2oP9Um98A"
 ADMIN_ID = 8294726083
 CHAT_ID = -1003393441169 
 CHAT_LINK = "https://t.me/+yai_7_Z-7_45MDky"
@@ -46,7 +46,7 @@ def init_db():
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📝 Вступить")]], resize_keyboard=True)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Вступить", callback_data="start_reg")]])
     await m.answer(f"ID: <code>{m.from_user.id}</code>", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(Command("add"))
@@ -100,16 +100,14 @@ async def cmd_all(m: types.Message):
 
 # --- АНКЕТА ---
 
-@dp.message(F.text == "📝 Вступить")
-async def start_reg_text(m: types.Message, state: FSMContext):
-    await m.answer("Напиши свою роль:")
-    await state.set_state(Form.role)
+@dp.callback_query(F.data == "start_reg")
+async def start_reg(call: CallbackQuery, state: FSMContext):
+    await call.message.answer("Напиши свою роль:")
+    await state.set_state(Form.role); await call.answer()
 
 @dp.message(Form.role)
 async def p_role(m: types.Message, state: FSMContext):
-    await state.update_data(role=m.text)
-    await m.answer("Напиши свой ЮЗ:")
-    await state.set_state(Form.user)
+    await state.update_data(role=m.text); await m.answer("Напиши свой ЮЗ:"); await state.set_state(Form.user)
 
 @dp.message(Form.user)
 async def p_user(m: types.Message, state: FSMContext):
@@ -128,6 +126,7 @@ async def admin_btns(call: CallbackQuery):
         role = call.message.text.split("РОЛЬ: ")[1] if "РОЛЬ: " in call.message.text else "Member"
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
+        cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_uid, role))
         conn.commit(); conn.close()
         await bot.send_message(target_uid, f"Принято. Роль: {role}\n{CHAT_LINK}")
         await call.message.edit_text(call.message.text + "\nSTATUS: OK")
@@ -157,14 +156,22 @@ async def on_chat_member_update(update: ChatMemberUpdated):
             cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
             conn.commit(); conn.close()
 
+# Захват сообщений
+@dp.message(F.chat.id == CHAT_ID)
+async def collect_msg(m: types.Message):
+    if m.from_user.is_bot: return
+    name = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (m.from_user.id, name))
+    conn.commit(); conn.close()
+
 async def main():
     init_db(); keep_alive()
     await bot.set_my_commands([
         BotCommand(command="start", description="Меню"),
         BotCommand(command="all", description="Сбор"),
         BotCommand(command="list", description="База"),
-        BotCommand(command="del", description="Удалить"),
-        BotCommand(command="add", description="Добавить")
+        BotCommand(command="del", description="Удалить")
     ])
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
