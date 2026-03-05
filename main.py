@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated, ChatJoinRequest
 
 # --- 24/7 SERVER ---
 app = Flask('')
@@ -41,12 +41,26 @@ def init_db():
     conn.commit()
     conn.close()
 
+# --- АВТО-ПРИНЯТИЕ ЗАЯВОК ---
+@dp.chat_join_request()
+async def approve_request(request: ChatJoinRequest):
+    uid = request.from_user.id
+    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
+    row = cursor.fetchone(); conn.close()
+    
+    if row:
+        await request.approve()
+        await bot.send_message(uid, f"Ваша заявка одобрена! Добро пожаловать.")
+    else:
+        await bot.send_message(uid, "Вас нет в списке одобренных. Пожалуйста, заполните анкету в боте.")
+
 # --- COMMANDS ---
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Вступить", callback_data="start_reg")]])
-    await m.answer(f"ID: <code>{m.from_user.id}</code>", reply_markup=kb, parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📝 Вступить", callback_data="start_reg")]])
+    await m.answer(f"ID: <code>{m.from_user.id}</code>\nНажмите кнопку ниже, чтобы подать заявку:", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(Command("add"))
 async def cmd_add(m: types.Message):
@@ -57,7 +71,7 @@ async def cmd_add(m: types.Message):
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_id, role))
         conn.commit(); conn.close()
-        await m.answer(f"OK: {target_id}")
+        await m.answer(f"OK: {target_id} добавлен")
     except: await m.answer("Формат: /add ID РОЛЬ")
 
 @dp.message(Command("del"))
@@ -116,7 +130,7 @@ async def p_user(m: types.Message, state: FSMContext):
          InlineKeyboardButton(text="Отклонить", callback_data=f"adm_no_{uid}")]
     ])
     await bot.send_message(ADMIN_ID, f"ANKETA\nЮЗ: {m.text}\nID: {uid}\nРОЛЬ: {role}", reply_markup=kb)
-    await m.answer("Заявка отправлена."); await state.clear()
+    await m.answer("Заявка отправлена администратору."); await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_"))
 async def admin_btns(call: CallbackQuery):
@@ -126,7 +140,7 @@ async def admin_btns(call: CallbackQuery):
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
         conn.commit(); conn.close()
-        await bot.send_message(target_uid, f"Принято. Роль: {role}\n{CHAT_LINK}")
+        await bot.send_message(target_uid, f"Вас одобрили! Теперь вступайте:\n{CHAT_LINK}")
         await call.message.edit_text(call.message.text + "\nSTATUS: OK")
     elif action == "no":
         await bot.send_message(target_uid, "Отклонено.")
@@ -140,28 +154,15 @@ async def on_chat_member_update(update: ChatMemberUpdated):
     if update.chat.id == CHAT_ID:
         uid = update.new_chat_member.user.id
         if update.new_chat_member.status == "member":
+            name = f"@{update.new_chat_member.user.username}" if update.new_chat_member.user.username else update.new_chat_member.user.first_name
             conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-            cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
-            row = cursor.fetchone(); conn.close()
-            if row:
-                name = f"@{update.new_chat_member.user.username}" if update.new_chat_member.user.username else update.new_chat_member.user.first_name
-                conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-                cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (uid, name))
-                conn.commit(); conn.close()
+            cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (uid, name))
+            conn.commit(); conn.close()
         elif update.new_chat_member.status in ["left", "kicked"]:
             conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
             cursor.execute("DELETE FROM all_users WHERE user_id = ?", (uid,))
             cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (uid,))
             conn.commit(); conn.close()
-
-# Захват сообщений
-@dp.message(F.chat.id == CHAT_ID)
-async def collect_msg(m: types.Message):
-    if m.from_user.is_bot: return
-    name = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (m.from_user.id, name))
-    conn.commit(); conn.close()
 
 async def main():
     init_db(); keep_alive()
@@ -173,7 +174,7 @@ async def main():
         BotCommand(command="add", description="Добавить")
     ])
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
