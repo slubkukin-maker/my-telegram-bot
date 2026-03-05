@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 import logging
+import os
 from flask import Flask
 from threading import Thread
 from aiogram import Bot, Dispatcher, types, F
@@ -10,14 +11,22 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, CallbackQuery, ChatMemberUpdated, ChatJoinRequest
 from aiogram.exceptions import TelegramBadRequest
 
-# Включаем логирование, чтобы видеть ошибки в консоли (важно для отладки на Render)
+# Настройка логирования для Render
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- 24/7 SERVER ---
 app = Flask('')
+
 @app.route('/')
-def home(): return "Bot is Online"
-def run(): app.run(host='0.0.0.0', port=8080)
+def home():
+    return "Bot is Online"
+
+def run():
+    # Render передает порт в переменную окружения PORT
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
 def keep_alive():
     t = Thread(target=run)
     t.daemon = True
@@ -49,25 +58,22 @@ def init_db():
 # --- СИСТЕМА ПЛАШЕК ---
 async def set_user_tag(user_id, tag):
     try:
-        # Сначала делаем админом без прав
         await bot.promote_chat_member(
             chat_id=CHAT_ID, 
             user_id=user_id, 
             can_manage_chat=True,
             can_invite_users=True
         )
-        await asyncio.sleep(1.5) # Немного увеличил задержку для стабильности
+        await asyncio.sleep(2)
         await bot.set_chat_member_custom_title(chat_id=CHAT_ID, user_id=user_id, custom_title=tag)
-        logging.info(f"Плашка {tag} для {user_id} установлена.")
+        logger.info(f"Tag set for {user_id}")
     except Exception as e:
-        logging.error(f"Ошибка плашки для {user_id}: {e}")
+        logger.error(f"Tag error: {e}")
 
-# --- ОБРАБОТКА ЗАЯВОК (ИСПРАВЛЕНО) ---
+# --- ЗАЯВКИ ---
 @dp.chat_join_request()
 async def handle_join_request(request: ChatJoinRequest):
     uid = request.from_user.id
-    logging.info(f"Получена заявка на вступление от {uid}")
-    
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     cursor.execute("SELECT role FROM approved_users WHERE user_id = ?", (uid,))
     row = cursor.fetchone(); conn.close()
@@ -75,11 +81,9 @@ async def handle_join_request(request: ChatJoinRequest):
     if row:
         try:
             await request.approve()
-            logging.info(f"Заявка пользователя {uid} одобрена автоматически.")
+            logger.info(f"Auto-approved {uid}")
         except Exception as e:
-            logging.error(f"Не удалось одобрить заявку {uid}: {e}")
-    else:
-        logging.info(f"Пользователя {uid} нет в списке одобренных (approved_users).")
+            logger.error(f"Approve error: {e}")
 
 # --- COMMANDS ---
 @dp.message(Command("start"))
@@ -96,7 +100,7 @@ async def cmd_delete(m: types.Message):
         cursor.execute("DELETE FROM all_users WHERE user_id = ?", (target_id,))
         cursor.execute("DELETE FROM approved_users WHERE user_id = ?", (target_id,))
         conn.commit(); conn.close()
-        await m.answer(f"Пользователь {target_id} удален.")
+        await m.answer(f"Удален: {target_id}")
     except: await m.answer("Формат: /del ID")
 
 @dp.message(Command("list"))
@@ -107,7 +111,7 @@ async def cmd_list(m: types.Message):
     if not rows:
         await m.answer("EMPTY")
         return
-    text = "LIST (ID | NAME):\n"
+    text = "LIST:\n"
     for r in rows: text += f"<code>{r[0]}</code> | {r[1]}\n"
     await m.answer(text, parse_mode="HTML")
 
@@ -146,18 +150,15 @@ async def p_user(m: types.Message, state: FSMContext):
 async def admin_btns(call: CallbackQuery, state: FSMContext):
     action = call.data.split("_")[1]; target_uid = int(call.data.split("_")[2])
     if action == "ok":
-        # Извлекаем роль корректно
-        msg_text = call.message.text
-        role = msg_text.split("ROLE: ")[1] if "ROLE: " in msg_text else "Member"
-        
+        role = "Member"
+        if "ROLE: " in call.message.text:
+            role = call.message.text.split("ROLE: ")[1].split("\n")[0]
         conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO approved_users (user_id, role) VALUES (?, ?)", (target_uid, role))
         cursor.execute("INSERT OR REPLACE INTO all_users (user_id, name) VALUES (?, ?)", (target_uid, role))
         conn.commit(); conn.close()
-        
         await bot.send_message(target_uid, f"Принято. Роль: {role}\n{CHAT_LINK}")
-        await call.message.edit_text(msg_text + "\nSTATUS: OK")
-        
+        await call.message.edit_text(call.message.text + "\nSTATUS: OK")
     elif action == "no":
         await bot.send_message(target_uid, "Отклонено.")
         await call.message.edit_text(call.message.text + "\nSTATUS: NO")
@@ -175,7 +176,6 @@ async def admin_reply_send(m: types.Message, state: FSMContext):
     except: await m.answer("Ошибка.")
     await state.clear()
 
-# --- ВХОД / ВЫХОД ---
 @dp.chat_member()
 async def on_chat_member_update(update: ChatMemberUpdated):
     if update.chat.id == CHAT_ID:
@@ -205,16 +205,20 @@ async def collect_msg(m: types.Message):
     conn.commit(); conn.close()
 
 async def main():
-    init_db(); keep_alive()
+    init_db()
+    keep_alive()
     await bot.set_my_commands([
         BotCommand(command="start", description="Меню"),
         BotCommand(command="all", description="Сбор"),
         BotCommand(command="list", description="База"),
-        BotCommand(command="del", description="Удалить по ID")
+        BotCommand(command="del", description="Удалить")
     ])
     await bot.delete_webhook(drop_pending_updates=True)
-    # ПРОВЕРЬ: здесь ОБЯЗАТЕЛЬНО должны быть все 4 типа апдейтов
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Исправленный запуск для Render (защита от конфликтов циклов событий)
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass
